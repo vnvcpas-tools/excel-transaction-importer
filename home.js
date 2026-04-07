@@ -1,6 +1,5 @@
-import { db } from './auth.js';
+import { db } from './firebase-config.js'; // Removed storage import
 import { collection, doc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
-import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-storage.js";
 import { currentUser } from './app.js';
 
 export default class Home {
@@ -13,7 +12,7 @@ export default class Home {
     async render() {
         return `
             <div class="container">
-                <h2>Transaction Importer</h2>
+                <h2>Transaction Importer (Storage Bypass Mode)</h2>
                 <div id="alertBox" class="alert"></div>
 
                 <div class="control-panel">
@@ -74,7 +73,6 @@ export default class Home {
         const tType = row['transaction-type'] || "";
         const aType = row['amount-type'] || "";
         const desc = row['amount-description'] || "";
-        // Excel Logic: CONCAT([trans-type], IF([amount-type]=[trans-type], "", [amount-type]), [desc])
         const middle = (aType === tType) ? "" : aType;
         return `${tType} ${middle} ${desc}`.replace(/\s+/g, ' ').trim();
     }
@@ -90,7 +88,7 @@ export default class Home {
         }
         
         if (limitData.count >= 10) {
-            this.showAlert("Monthly guest upload limit reached (10 uploads). Please login as Admin to make unlimited uploads.", "warning");
+            this.showAlert("Monthly guest upload limit reached (10 uploads). Please login as Admin.", "warning");
             return false;
         }
         
@@ -109,48 +107,40 @@ export default class Home {
             return;
         }
 
+        // Check Firestore to see if this filename was processed before
         const fileDocRef = doc(db, "transactionFiles", file.name);
         const fileDocSnap = await getDoc(fileDocRef);
 
         if (fileDocSnap.exists()) {
-            const proceed = confirm("An existing file with the same filename exists.\n\nClick OK to pull the old file from storage.\nClick Cancel if this is a new transaction and you want to rename the file.");
+            const uploadDate = new Date(fileDocSnap.data().dateTimeUploaded).toLocaleDateString();
+            const proceed = confirm(`DUPLICATE WARNING: A file named "${file.name}" was already uploaded on ${uploadDate}.\n\nAre you sure you want to process this again? It may result in duplicate entries in QuickBooks.\n\nClick OK to process anyway, or Cancel to abort.`);
+            
             if (!proceed) {
                 e.target.value = ""; 
                 return;
             }
-
-            try {
-                const storageRef = ref(storage, `uploads/${file.name}`);
-                const url = await getDownloadURL(storageRef);
-                const response = await fetch(url);
-                const text = await response.text();
-                this.showAlert("Warning: These transactions might have already been posted to QuickBooks. Please check QuickBooks thoroughly.", "info");
-                this.parseData(text, false); 
-            } catch (err) {
-                this.showAlert("Warning: The old file might have been deleted from storage. Make sure this new file is not a duplicate of previously processed transactions.", "warning");
-                this.parseFileAndUpload(file);
-            }
-        } else {
-            this.parseFileAndUpload(file);
+            this.showAlert(`Warning: Processing a previously uploaded file (${file.name}). Ensure you are not creating duplicates in QuickBooks.`, "info");
         }
+
+        // Proceed to parse the local file (Bypasses Storage)
+        this.parseFileAndLogRecord(file);
     }
 
-    parseFileAndUpload(file) {
+    parseFileAndLogRecord(file) {
         Papa.parse(file, {
             header: true,
             skipEmptyLines: true,
             complete: async (results) => {
-                await this.uploadFileRecord(file);
+                // Log the filename to Firestore so we know it was processed
+                await this.logFileRecord(file);
+                
+                // Process the data directly from local memory
                 this.parseData(results.data, true);
             }
         });
     }
 
     parseData(data, isNew) {
-        if (typeof data === "string") {
-            data = Papa.parse(data, { header: true, skipEmptyLines: true }).data;
-        }
-
         if (!currentUser && data.length > 10) {
             data = data.slice(0, 10);
             this.showAlert("Guest mode: File truncated to first 10 transaction lines.", "info");
@@ -172,16 +162,16 @@ export default class Home {
         this.renderTable();
     }
 
-    async uploadFileRecord(file) {
+    async logFileRecord(file) {
+        // We only write to Firestore to log the filename and date. Storage upload is completely bypassed.
         try {
-            const storageRef = ref(storage, `uploads/${file.name}`);
-            await uploadBytes(storageRef, file);
             await setDoc(doc(db, "transactionFiles", file.name), {
                 dateTimeUploaded: new Date().toISOString(),
-                uploadedBy: currentUser ? currentUser.email : "Guest"
+                uploadedBy: currentUser ? currentUser.email : "Guest",
+                storageStatus: "Bypassed"
             });
         } catch (e) {
-            console.error("Storage upload warning:", e);
+            console.error("Firestore logging warning:", e);
         }
     }
 
@@ -270,7 +260,6 @@ export default class Home {
 
         const depName = this.depositAccount || "[Bank/Deposit Account]";
         
-        // Deposit rules: Postive net -> cash received (Debit). Negative net -> cash paid (Credit).
         if (netDeposit > 0) {
             html += `<tr style="background:#e8f8f5;"><td><strong>${depName}</strong></td><td>${netDeposit.toFixed(2)}</td><td></td></tr>`;
         } else if (netDeposit < 0) {
@@ -280,7 +269,6 @@ export default class Home {
         let totalDebit = netDeposit > 0 ? netDeposit : 0;
         let totalCredit = netDeposit < 0 ? Math.abs(netDeposit) : 0;
 
-        // Category rules: Negative net -> Debit. Positive net -> Credit.
         Object.keys(summary).forEach(cat => {
             const amt = summary[cat];
             let debit = "";
