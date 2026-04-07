@@ -1,4 +1,4 @@
-// -- admin.js
+// -- admin.js --
 import { db } from './auth.js';
 import { doc, setDoc } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
 import { currentUser } from './app.js';
