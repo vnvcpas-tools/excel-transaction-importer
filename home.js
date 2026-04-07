@@ -1,4 +1,4 @@
-import { db, storage } from './auth.js';
+import { db } from './auth.js';
 import { collection, doc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
 import { ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-storage.js";
 import { currentUser } from './app.js';
