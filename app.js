@@ -1,47 +1,42 @@
-import { auth, provider } from './firebase-init.js';
+import { auth, provider } from './auth.js';
 import { onAuthStateChanged, signInWithPopup, signOut } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-auth.js";
 
 const appRoot = document.getElementById('app-root');
 const authBtn = document.getElementById('authBtn');
 export let currentUser = null;
 
+// Hash-Based Router avoids 404s on GitHub Pages
 const routes = {
-    '/': () => import('./views/Home.js').then(m => m.default),
-    '/admin': () => import('./views/Admin.js').then(m => m.default)
+    '#/': () => import('./home.js').then(m => m.default),
+    '#/admin': () => import('./admin.js').then(m => m.default)
 };
 
 async function router() {
-    const path = window.location.pathname;
-    const loadView = routes[path] || routes['/'];
+    let hash = window.location.hash || '#/';
+    const loadView = routes[hash] || routes['#/'];
     
     try {
-        appRoot.innerHTML = '<div class="loader">Loading...</div>';
         const ViewComponent = await loadView();
         const viewInstance = new ViewComponent();
         appRoot.innerHTML = await viewInstance.render();
         await viewInstance.afterRender();
     } catch (error) {
         console.error("Routing Error:", error);
-        appRoot.innerHTML = `<h2>Error loading module</h2>`;
+        appRoot.innerHTML = `<div class="container"><h2>Module Load Error</h2></div>`;
     }
 }
 
-// Client-Side Routing Interceptor
-window.addEventListener('popstate', router);
-document.addEventListener('DOMContentLoaded', () => {
-    document.body.addEventListener('click', e => {
-        if (e.target.matches('[data-link]')) {
-            e.preventDefault();
-            window.history.pushState(null, null, e.target.href);
-            router();
-        }
-    });
+// Listen for hash changes
+window.addEventListener('hashchange', router);
 
-    // Auth Initialization
+document.addEventListener('DOMContentLoaded', () => {
+    // Initial route check
+    router();
+
     onAuthStateChanged(auth, user => {
         currentUser = user;
         authBtn.innerText = user ? "Logout" : "Admin Login";
-        router(); // Re-render view based on auth state
+        router(); // Refresh view when auth changes
     });
 
     authBtn.addEventListener('click', () => {
