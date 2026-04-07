@@ -1,6 +1,6 @@
-import { db } from '../firebase-init.js';
+import { db } from './auth.js';
 import { doc, setDoc } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
-import { currentUser } from '../app.js';
+import { currentUser } from './app.js';
 
 export default class Admin {
     async render() {
@@ -94,7 +94,6 @@ export default class Admin {
             { line: "ServiceFee Cost of Advertising TransactionTotalAmount", cat: "Advertising" }
         ];
 
-        // Using standard loops to avoid Promise.all limits on free tier bursts
         for (let i = 0; i < rawData.length; i++) {
             const data = rawData[i];
             const cleanLine = data.line.replace(/\s+/g, ' ').trim();
