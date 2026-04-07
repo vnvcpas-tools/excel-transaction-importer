@@ -1,4 +1,4 @@
-import { db } from './auth.js'; // Removed storage import
+import { db } from './auth.js'; 
 import { collection, doc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
 import { currentUser } from './app.js';
 
@@ -151,7 +151,8 @@ export default class Home {
             return {
                 ...row,
                 lineItem: lineItem,
-                category: this.categoriesDict[lineItem] || ""
+                category: this.categoriesDict[lineItem] || "",
+                selected: false
             };
         });
 
@@ -194,37 +195,78 @@ export default class Home {
 
     renderTable() {
         let html = `
+            <div style="margin-bottom: 10px;">
+                <button class="btn danger" onclick="window.deleteSelected()">Delete Selected</button>
+            </div>
             <div class="table-responsive">
             <table><thead><tr>
+                <th style="width: 40px;"><input type="checkbox" id="selectAllCb" onchange="window.toggleSelectAll(this.checked)"></th>
                 <th>Line Item</th>
                 <th>Category</th>
                 <th>Amount</th>
                 <th>Date</th>
                 <th>Order ID</th>
                 <th>SKU</th>
+                <th>Quantity Purchased</th>
+                <th>Adjustment ID</th>
+                <th>Shipment ID</th>
+                <th>Fulfillment ID</th>
+                <th>Marketplace Name</th>
+                <th>Order Item ID</th>
+                <th>Merchant Order Item ID</th>
+                <th>Merchant Adjustment Item ID</th>
+                <th>Promotion ID</th>
             </tr></thead><tbody>
         `;
 
-        this.transactions.forEach((t) => {
+        this.transactions.forEach((t, index) => {
             let catDisplay = t.category;
             if (!t.category) {
                 catDisplay = `<input type="text" class="cat-input" placeholder="Add Category..." onblur="window.updateCat('${t.lineItem}', this.value)"><span class="text-danger"> Missing</span>`;
             }
 
             html += `<tr>
+                <td><input type="checkbox" class="row-checkbox" ${t.selected ? 'checked' : ''} onchange="window.toggleRow(${index}, this.checked)"></td>
                 <td><strong>${t.lineItem}</strong></td>
                 <td>${catDisplay}</td>
                 <td>${t.amount || 0}</td>
-                <td>${t['posted-date']}</td>
-                <td>${t['order-id']}</td>
-                <td>${t['sku']}</td>
+                <td>${t['posted-date'] || ''}</td>
+                <td>${t['order-id'] || ''}</td>
+                <td>${t['sku'] || ''}</td>
+                <td>${t['quantity-purchased'] || ''}</td>
+                <td>${t['adjustment-id'] || ''}</td>
+                <td>${t['shipment-id'] || ''}</td>
+                <td>${t['fulfillment-id'] || ''}</td>
+                <td>${t['marketplace-name'] || ''}</td>
+                <td>${t['order-item-code'] || ''}</td>
+                <td>${t['merchant-order-item-id'] || ''}</td>
+                <td>${t['merchant-adjustment-item-id'] || ''}</td>
+                <td>${t['promotion-id'] || ''}</td>
             </tr>`;
         });
 
         html += `</tbody></table></div>`;
         document.getElementById('tabContent').innerHTML = html;
 
+        // Expose global functions for inline HTML event listeners
         window.updateCat = (line, val) => this.updateCategory(line, val);
+        
+        window.toggleSelectAll = (checked) => {
+            this.transactions.forEach(t => t.selected = checked);
+            document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = checked);
+        };
+        
+        window.toggleRow = (index, checked) => {
+            this.transactions[index].selected = checked;
+            const allChecked = this.transactions.length > 0 && this.transactions.every(t => t.selected);
+            const selectAllCb = document.getElementById('selectAllCb');
+            if (selectAllCb) selectAllCb.checked = allChecked;
+        };
+
+        window.deleteSelected = () => {
+            this.transactions = this.transactions.filter(t => !t.selected);
+            this.renderTable();
+        };
     }
 
     renderJournal() {
@@ -259,32 +301,54 @@ export default class Home {
         `;
 
         const depName = this.depositAccount || "[Bank/Deposit Account]";
-        
+        let journalLines = [];
+
+        // 1. Process Deposit Account
         if (netDeposit > 0) {
-            html += `<tr style="background:#e8f8f5;"><td><strong>${depName}</strong></td><td>${netDeposit.toFixed(2)}</td><td></td></tr>`;
+            journalLines.push({ account: `<strong>${depName}</strong>`, debit: netDeposit, credit: 0, isDeposit: true });
         } else if (netDeposit < 0) {
-            html += `<tr style="background:#e8f8f5;"><td><strong>${depName}</strong></td><td></td><td>${Math.abs(netDeposit).toFixed(2)}</td></tr>`;
+            journalLines.push({ account: `<strong>${depName}</strong>`, debit: 0, credit: Math.abs(netDeposit), isDeposit: true });
         }
 
         let totalDebit = netDeposit > 0 ? netDeposit : 0;
         let totalCredit = netDeposit < 0 ? Math.abs(netDeposit) : 0;
 
+        // 2. Process Categories
         Object.keys(summary).forEach(cat => {
             const amt = summary[cat];
-            let debit = "";
-            let credit = "";
-
             if (amt < 0) {
-                debit = Math.abs(amt).toFixed(2);
+                journalLines.push({ account: cat, debit: Math.abs(amt), credit: 0, isDeposit: false });
                 totalDebit += Math.abs(amt);
             } else if (amt > 0) {
-                credit = amt.toFixed(2);
+                journalLines.push({ account: cat, debit: 0, credit: amt, isDeposit: false });
                 totalCredit += amt;
             }
+        });
 
-            if (amt !== 0) {
-                html += `<tr><td>${cat}</td><td>${debit}</td><td>${credit}</td></tr>`;
-            }
+        // 3. Sort Journal Lines
+        journalLines.sort((a, b) => {
+            // Deposit debit stays at absolute top
+            if (a.isDeposit && a.debit > 0) return -1;
+            if (b.isDeposit && b.debit > 0) return 1;
+            
+            // Deposit credit stays at absolute bottom
+            if (a.isDeposit && a.credit > 0) return 1;
+            if (b.isDeposit && b.credit > 0) return -1;
+
+            // Debits must be placed above Credits
+            if (a.debit > 0 && b.credit > 0) return -1;
+            if (a.credit > 0 && b.debit > 0) return 1;
+
+            return 0; // Maintain natural grouping otherwise
+        });
+
+        // 4. Render Sorted Rows
+        journalLines.forEach(line => {
+            const debitStr = line.debit > 0 ? line.debit.toFixed(2) : "";
+            const creditStr = line.credit > 0 ? line.credit.toFixed(2) : "";
+            const bgClass = line.isDeposit ? ' style="background:#e8f8f5;"' : '';
+            
+            html += `<tr${bgClass}><td>${line.account}</td><td>${debitStr}</td><td>${creditStr}</td></tr>`;
         });
 
         html += `<tr style="font-weight:bold; background:#e9ecef">
