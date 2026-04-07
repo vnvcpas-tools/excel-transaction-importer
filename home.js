@@ -1,4 +1,4 @@
-import { db } from './firebase-config.js'; // Removed storage import
+import { db } from './auth.js'; // Removed storage import
 import { collection, doc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
 import { currentUser } from './app.js';
 
