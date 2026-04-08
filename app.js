@@ -94,7 +94,7 @@ function initiateQboAuth() {
 }
 
 async function handleOauthCallback() {
-    // When Intuit redirects back to VilBooks, it puts the code in the URL
+    // When Intuit redirects back to Excel Transaction Importer, it puts the code in the URL
     const urlParams = new URLSearchParams(window.location.search);
     const authCode = urlParams.get('code');
     const realmId = urlParams.get('realmId');
