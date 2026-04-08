@@ -84,7 +84,7 @@ function renderQboHeader() {
 function initiateQboAuth() {
     // Note: You must replace 'YOUR_PUBLIC_CLIENT_ID' with the Client ID from Intuit
     const intuitAuthUrl = "https://appcenter.intuit.com/connect/oauth2";
-    const clientId = "YOUR_PUBLIC_CLIENT_ID"; 
+    const clientId = "AB3UQmsMlQg0m6pcEGK9yDVOPISy6iyHiLVBiTVAnLqzMPrSXv"; 
     const redirectUri = window.location.origin + window.location.pathname; 
     const scope = "com.intuit.quickbooks.accounting";
     const state = "security_token_" + Math.random().toString(36).substring(7);
