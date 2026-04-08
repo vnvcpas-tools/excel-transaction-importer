@@ -1,5 +1,6 @@
-import { db } from './auth.js'; 
+import { db, functions } from './auth.js'; 
 import { collection, doc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-functions.js";
 import { currentUser } from './app.js';
 
 export default class Home {
@@ -44,6 +45,9 @@ export default class Home {
             if(document.querySelector('.tab.active').dataset.tab === 'journal') this.renderJournal();
         });
 
+        // Attach the Push to QBO event listener
+        document.getElementById('syncQboBtn').addEventListener('click', () => this.handlePushToQbo());
+
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
                 document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -52,6 +56,105 @@ export default class Home {
                 else this.renderJournal();
             });
         });
+    }
+
+    // Replace the numbers below with the real ID numbers from your QBO Sandbox Chart of Accounts URLs
+    getQboAccountId(accountName) {
+        const qboAccountMap = {
+            "[Bank/Deposit Account]": "35", 
+            "Amazon Fees": "64",
+            "Postage": "65",
+            "Refunds/Discounts Given": "66",
+            "Advertising": "67",
+            "Revenue - Sales": "68",
+            "Revenue - Shipping Charges": "69"
+        };
+        return qboAccountMap[accountName] || null;
+    }
+
+    async handlePushToQbo() {
+        const qboSelect = document.getElementById('qboSelect');
+        if (!qboSelect || !qboSelect.value) {
+            this.showAlert("Please connect and select a QBO account first.", "warning");
+            return;
+        }
+
+        if (this.transactions.length === 0) {
+            this.showAlert("No transactions to push.", "warning");
+            return;
+        }
+
+        const pushBtn = document.getElementById('syncQboBtn');
+        const originalText = pushBtn.innerText;
+        pushBtn.innerText = "Pushing to QBO...";
+        pushBtn.disabled = true;
+
+        try {
+            let summary = {};
+            let netDeposit = 0;
+            let missingCats = false;
+
+            // Re-aggregate the data just like the Journal tab does
+            this.transactions.forEach(t => {
+                if (!t.category) missingCats = true;
+                const amt = parseFloat(t.amount || 0);
+                const key = t.category || "UNCATEGORIZED";
+                if (!summary[key]) summary[key] = 0;
+                summary[key] += amt;
+                netDeposit += amt;
+            });
+
+            if (missingCats) {
+                throw new Error("Missing Categories: Please map all line items before pushing.");
+            }
+
+            const linesToPush = [];
+            const depName = this.depositAccount || "[Bank/Deposit Account]";
+            const depId = this.getQboAccountId(depName);
+
+            if (!depId) throw new Error(`Mapping Error: No QBO ID found for ${depName}. Update getQboAccountId map.`);
+
+            // 1. Queue the Deposit Account
+            if (netDeposit > 0) {
+                linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: "Total Deposit" });
+            } else if (netDeposit < 0) {
+                linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: "Total Withdrawal" });
+            }
+
+            // 2. Queue the Categories
+            for (const cat of Object.keys(summary)) {
+                const amt = summary[cat];
+                if (amt === 0) continue;
+
+                const qboId = this.getQboAccountId(cat);
+                if (!qboId) throw new Error(`Mapping Error: No QBO ID found for category "${cat}". Update getQboAccountId map.`);
+
+                if (amt < 0) {
+                    linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: cat });
+                } else if (amt > 0) {
+                    linesToPush.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: cat });
+                }
+            }
+
+            // 3. Fire it off to the Cloud Function
+            const pushJournalEntry = httpsCallable(functions, 'pushJournalEntry');
+            const response = await pushJournalEntry({
+                realmId: qboSelect.value,
+                lines: linesToPush,
+                privateNote: "Imported via Excel Transaction Importer"
+            });
+
+            if (response.data.success) {
+                this.showAlert(`Success! Journal Entry created in QBO (ID: ${response.data.qboResponseId})`, "success");
+            }
+
+        } catch (error) {
+            console.error("Push failed:", error);
+            this.showAlert(error.message || "Failed to push to QBO. See console.", "danger");
+        } finally {
+            pushBtn.innerText = originalText;
+            pushBtn.disabled = false;
+        }
     }
 
     async loadCategories() {
