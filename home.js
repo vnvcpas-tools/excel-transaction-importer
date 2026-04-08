@@ -58,20 +58,6 @@ export default class Home {
         });
     }
 
-    // Replace the numbers below with the real ID numbers from your QBO Sandbox Chart of Accounts URLs
-    getQboAccountId(accountName) {
-        const qboAccountMap = {
-            "[Bank/Deposit Account]": "35", 
-            "Amazon Fees": "64",
-            "Postage": "65",
-            "Refunds/Discounts Given": "66",
-            "Advertising": "67",
-            "Revenue - Sales": "68",
-            "Revenue - Shipping Charges": "69"
-        };
-        return qboAccountMap[accountName] || null;
-    }
-
     async handlePushToQbo() {
         const qboSelect = document.getElementById('qboSelect');
         if (!qboSelect || !qboSelect.value) {
@@ -86,7 +72,7 @@ export default class Home {
 
         const pushBtn = document.getElementById('syncQboBtn');
         const originalText = pushBtn.innerText;
-        pushBtn.innerText = "Pushing to QBO...";
+        pushBtn.innerText = "Provisioning Accounts & Pushing...";
         pushBtn.disabled = true;
 
         try {
@@ -109,25 +95,38 @@ export default class Home {
             }
 
             const linesToPush = [];
-            const depName = this.depositAccount || "[Bank/Deposit Account]";
-            const depId = this.getQboAccountId(depName);
+            const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Checking";
+            const realmId = qboSelect.value;
+            const getOrCreateQboAccount = httpsCallable(functions, 'getOrCreateQboAccount');
 
-            if (!depId) throw new Error(`Mapping Error: No QBO ID found for ${depName}. Update getQboAccountId map.`);
+            // 1. Get or Create the Deposit Account
+            let depId;
+            try {
+                const depResponse = await getOrCreateQboAccount({ accountName: depName, realmId: realmId });
+                depId = depResponse.data.id;
+            } catch (err) {
+                throw new Error(`Failed to provision deposit account "${depName}".`);
+            }
 
-            // 1. Queue the Deposit Account
+            // Queue the Deposit Account
             if (netDeposit > 0) {
                 linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: "Total Deposit" });
             } else if (netDeposit < 0) {
                 linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: "Total Withdrawal" });
             }
 
-            // 2. Queue the Categories
+            // 2. Queue the Categories (Auto-Provisioning them one by one)
             for (const cat of Object.keys(summary)) {
                 const amt = summary[cat];
                 if (amt === 0) continue;
 
-                const qboId = this.getQboAccountId(cat);
-                if (!qboId) throw new Error(`Mapping Error: No QBO ID found for category "${cat}". Update getQboAccountId map.`);
+                let qboId;
+                try {
+                    const catResponse = await getOrCreateQboAccount({ accountName: cat, realmId: realmId });
+                    qboId = catResponse.data.id;
+                } catch (err) {
+                    throw new Error(`Failed to provision category account "${cat}".`);
+                }
 
                 if (amt < 0) {
                     linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: cat });
@@ -139,7 +138,7 @@ export default class Home {
             // 3. Fire it off to the Cloud Function
             const pushJournalEntry = httpsCallable(functions, 'pushJournalEntry');
             const response = await pushJournalEntry({
-                realmId: qboSelect.value,
+                realmId: realmId,
                 lines: linesToPush,
                 privateNote: "Imported via Excel Transaction Importer"
             });
@@ -403,7 +402,7 @@ export default class Home {
             </tr></thead><tbody>
         `;
 
-        const depName = this.depositAccount || "[Bank/Deposit Account]";
+        const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Checking";
         let journalLines = [];
 
         // 1. Process Deposit Account
