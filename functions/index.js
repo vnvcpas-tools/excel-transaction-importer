@@ -12,7 +12,7 @@ const qboClientSecret = defineSecret("QBO_CLIENT_SECRET");
 exports.exchangeQboToken = onCall(
     { secrets: [qboClientId, qboClientSecret] },
     async (request) => {
-        // 1. Security Check: Ensure the user clicking connect is actually logged into VilBooks
+        // 1. Security Check: Ensure the user clicking connect is actually logged into Excel Transaction Importer
         if (!request.auth) {
             throw new HttpsError("unauthenticated", "You must be logged in to connect QuickBooks.");
         }
