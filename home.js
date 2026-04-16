@@ -9,7 +9,7 @@ export default class Home {
         this.transactions = [];
         this.categoriesDict = {};
         
-        // New State Variables for Filtering and Tabs
+        // State Variables for Filtering and Tabs
         this.depositAccount = "Payments to Deposit"; 
         this.startDate = "";
         this.endDate = "";
@@ -207,7 +207,6 @@ export default class Home {
                         individualLines.push({ postingType: "Debit", amount: amt, qboAccountId: depId, description: "Payout Transfer Offset" });
                     }
 
-                    // Format specific transaction date (YYYY-MM-DD)
                     const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
 
                     await pushJournalEntry({
@@ -310,19 +309,6 @@ export default class Home {
         document.getElementById('alertBox').className = "alert";
     }
 
-    calculateLineItem(row) {
-        const typeStr = (row['type'] || "").trim();
-        const descStr = (row['description'] || "").trim();
-        const tLower = typeStr.toLowerCase();
-
-        // Specific handling for Orders and Refunds as requested
-        if (tLower === 'order') return "Order";
-        if (tLower === 'refund') return "Refund";
-
-        // Everything else uses the Excel logic: =concat("type"," - ","description")
-        return `${typeStr} - ${descStr}`.replace(/^ - | - $/g, '').trim();
-    }
-
     checkGuestLimits() {
         if (currentUser) return true;
         
@@ -347,6 +333,12 @@ export default class Home {
         this.hideAlert();
         const file = e.target.files[0];
         if (!file) return;
+
+        if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
+            this.showAlert("<strong>Format Error:</strong> You uploaded an Excel workbook (.xlsx). Please open the file in Excel, choose <strong>File > Save As</strong>, and save it as a <strong>CSV (Comma delimited)</strong> file before uploading.", "danger");
+            e.target.value = "";
+            return;
+        }
 
         if (!this.checkGuestLimits()) {
             e.target.value = "";
@@ -383,18 +375,57 @@ export default class Home {
             this.showAlert("Guest mode: File truncated to first 10 transaction lines.", "info");
         }
 
-        this.transactions = data.map(row => {
-            const lineItem = this.calculateLineItem(row);
-            return {
-                ...row,
-                total: row['total'] || 0, // Ensure amount is locked to the total column
-                uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
-                lineItem: lineItem,
-                category: this.categoriesDict[lineItem] || "",
-                selected: false
-            };
+        const expandedTransactions = [];
+        
+        // Exact column headers to look for when exploding Order/Refund rows
+        const targetColumns = [
+            'product sales', 'product sales tax', 'shipping credits', 'shipping credits tax',
+            'gift wrap credits', 'giftwrap credits tax', 'Regulatory Fee', 'Tax On Regulatory Fee',
+            'promotional rebates', 'promotional rebates tax', 'marketplace withheld tax',
+            'selling fees', 'fba fees'
+        ];
+
+        data.forEach(row => {
+            const typeStr = (row['type'] || "").trim();
+            const tLower = typeStr.toLowerCase();
+
+            // Handle Orders and Refunds by splitting into multiple sub-rows
+            if (tLower === 'order' || tLower === 'refund') {
+                targetColumns.forEach(colName => {
+                    const amt = parseFloat(row[colName] || 0);
+                    if (amt !== 0) {
+                        expandedTransactions.push({
+                            ...row,
+                            total: amt, // Map the column's sub-amount to the 'total' property
+                            lineItem: colName,
+                            category: this.categoriesDict[colName] || "",
+                            uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
+                            selected: false
+                        });
+                    }
+                });
+            } 
+            // Handle Service Fees, Transfers, and Everything Else normally
+            else {
+                const descStr = (row['description'] || "").trim();
+                const lineItem = `${typeStr} - ${descStr}`.replace(/^ - | - $/g, '').trim();
+                const amt = parseFloat(row['total'] || 0);
+                
+                // Only push if it has an amount or a valid description to avoid entirely blank junk rows
+                if (amt !== 0 || typeStr !== "") {
+                    expandedTransactions.push({
+                        ...row,
+                        total: amt,
+                        lineItem: lineItem,
+                        category: this.categoriesDict[lineItem] || "",
+                        uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
+                        selected: false
+                    });
+                }
+            }
         });
 
+        this.transactions = expandedTransactions;
         document.getElementById('syncQboBtn').disabled = false;
         this.renderActiveView();
     }
@@ -402,7 +433,6 @@ export default class Home {
     async logFileRecord(file) {
         let status = "Local Render Only";
         
-        // Dynamically push to Blaze Storage since the App is upgraded
         if (currentUser && db.app) {
             try {
                 const storage = getStorage(db.app);
@@ -460,13 +490,14 @@ export default class Home {
                 <th>Category</th>
                 <th>Amount (Total)</th>
                 <th>Date/Time</th>
+                <th>Settlement ID</th>
                 <th>Order ID</th>
                 <th>SKU</th>
             </tr></thead><tbody>
         `;
 
         if (currentData.length === 0) {
-            html += `<tr><td colspan="8" style="text-align:center;">No data matches the current filters.</td></tr>`;
+            html += `<tr><td colspan="9" style="text-align:center;">No data matches the current filters.</td></tr>`;
         }
 
         currentData.forEach((t) => {
@@ -482,6 +513,7 @@ export default class Home {
                 <td>${catDisplay}</td>
                 <td>${t.total}</td>
                 <td>${t['date/time'] || ''}</td>
+                <td>${t['settlement id'] || ''}</td>
                 <td>${t['order id'] || ''}</td>
                 <td>${t['sku'] || ''}</td>
             </tr>`;
