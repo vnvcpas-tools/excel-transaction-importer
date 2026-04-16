@@ -33,7 +33,7 @@ export default class Admin {
                 </div>
 
                 <div id="catTableContainer">
-                    <p style="padding: 2rem; text-align: center; color: #7f8c8d;">Loading categories...</p>
+                    <p style="padding: 1rem; text-align: center; color: #7f8c8d;">Loading categories...</p>
                 </div>
             </div>
         `;
