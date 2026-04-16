@@ -25,13 +25,13 @@ export default class Admin {
                 
                 <h3>Manage Category Mappings</h3>
                 <div class="control-panel" style="margin-bottom: 2rem; display: flex; flex-direction: column; gap: 10px;">
-                    <h4 id="formTitle">Add New Mapping</h4>
+                    <h4 id="formTitle" style="margin: 0;">Add New Mapping</h4>
                     <input type="text" id="catLineItem" placeholder="Line Item (Exact match from import file)" style="padding: 0.5rem;">
                     <input type="text" id="catName" placeholder="QBO Category Name" style="padding: 0.5rem;">
                     <input type="text" id="catDesc" placeholder="Description / Notes (Optional)" style="padding: 0.5rem;">
                     <div style="display: flex; gap: 10px;">
-                        <button id="saveCatBtn" class="btn">Save Mapping</button>
-                        <button id="cancelEditBtn" class="btn outline" style="display: none;">Cancel Edit</button>
+                        <button id="saveCatBtn" class="btn" style="padding: 0.5rem 1rem;">Save Mapping</button>
+                        <button id="cancelEditBtn" class="btn outline" style="display: none; padding: 0.5rem 1rem;">Cancel Edit</button>
                     </div>
                     <div id="adminStatus" style="color: var(--accent); font-weight: bold; font-size: 0.9rem;"></div>
                 </div>
@@ -76,17 +76,17 @@ export default class Admin {
                 <thead>
                     <tr>
                         <th style="padding: 0.5rem; width: 45%;">
-                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span>Line Item</span>
-                                <span id="searchToggleBtn" style="cursor: pointer; padding: 0.2rem; user-select: none;" title="Toggle Search">🔍</span>
-                            </div>
-                            <div id="searchContainer" style="display: ${this.searchVisible ? 'block' : 'none'}; margin-top: 8px;">
-                                <input type="text" id="searchInput" placeholder="Search line items or categories..." value="${this.searchTerm}" style="padding: 0.5rem; width: 100%; box-sizing: border-box; font-weight: normal; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="white-space: nowrap;">Line Item</span>
+                                <span id="searchToggleBtn" style="cursor: pointer; user-select: none;" title="Toggle Search">🔍</span>
+                                <div id="searchContainer" style="display: ${this.searchVisible ? 'block' : 'none'}; flex: 1; min-width: 0;">
+                                    <input type="text" id="searchInput" placeholder="Search line items or categories..." value="${this.searchTerm}" style="padding: 0.5rem; width: 100%; box-sizing: border-box; font-weight: normal; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px;">
+                                </div>
                             </div>
                         </th>
                         <th style="padding: 0.5rem;">Category</th>
                         <th style="padding: 0.5rem;">Description</th>
-                        <th style="width: 150px; text-align: center; padding: 0.5rem;">Actions</th>
+                        <th style="width: 130px; text-align: center; padding: 0.5rem;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -106,7 +106,7 @@ export default class Admin {
                         <td style="padding: 0.5rem;"><strong class="line-item-text">${c.lineItem}</strong></td>
                         <td style="padding: 0.5rem;" class="cat-name-text">${c.category}</td>
                         <td style="padding: 0.5rem;">${c.description || '<span style="color:#aaa;">No description</span>'}</td>
-                        <td style="text-align: center; padding: 0.5rem;">
+                        <td style="text-align: center; padding: 0.5rem; white-space: nowrap;">
                             <button class="btn outline edit-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 5px;" title="Edit this row">Edit</button>
                             <button class="btn danger delete-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" title="Delete this row">Delete</button>
                         </td>
