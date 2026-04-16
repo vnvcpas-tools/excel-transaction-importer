@@ -45,10 +45,6 @@ export default class Admin {
         document.getElementById('saveCatBtn').addEventListener('click', () => this.handleSave());
         document.getElementById('cancelEditBtn').addEventListener('click', () => this.resetForm());
 
-        // Global functions exposed for inline HTML buttons in the table
-        window.editCategory = (id) => this.startEdit(id);
-        window.deleteCategory = (id) => this.handleDelete(id);
-
         await this.loadCategories();
     }
 
@@ -87,18 +83,16 @@ export default class Admin {
         if (this.categories.length === 0) {
             html += `<tr><td colspan="4" style="text-align: center;">No categories found. Add one above.</td></tr>`;
         } else {
-            this.categories.forEach(c => {
-                // Safely escape quotes so the HTML buttons don't break
-                const safeId = c.id.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                
+            // Use the array index to perfectly link the row to the data, avoiding string escape bugs
+            this.categories.forEach((c, index) => {
                 html += `
-                    <tr>
+                    <tr class="cat-row" data-index="${index}" style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f1f8ff'" onmouseout="this.style.background='transparent'">
                         <td><strong>${c.lineItem}</strong></td>
                         <td>${c.category}</td>
                         <td>${c.description || '<span style="color:#aaa;">No description</span>'}</td>
                         <td style="text-align: center;">
-                            <button class="btn outline" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 5px;" onclick="window.editCategory('${safeId}')">Edit</button>
-                            <button class="btn danger" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" onclick="window.deleteCategory('${safeId}')">Delete</button>
+                            <button class="btn outline edit-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 5px;" title="Edit this row">Edit</button>
+                            <button class="btn danger delete-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" title="Delete this row">Delete</button>
                         </td>
                     </tr>
                 `;
@@ -107,6 +101,37 @@ export default class Admin {
 
         html += `</tbody></table></div>`;
         document.getElementById('catTableContainer').innerHTML = html;
+
+        // Attach strict event listeners after rendering the HTML
+        this.attachTableListeners();
+    }
+
+    attachTableListeners() {
+        // 1. Click Row to Edit
+        document.querySelectorAll('.cat-row').forEach(row => {
+            row.addEventListener('click', () => {
+                const cat = this.categories[row.dataset.index];
+                this.startEdit(cat.id);
+            });
+        });
+
+        // 2. Click Edit Button (Prevents triggering the row click twice)
+        document.querySelectorAll('.edit-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); 
+                const cat = this.categories[btn.dataset.index];
+                this.startEdit(cat.id);
+            });
+        });
+
+        // 3. Click Delete Button (Prevents triggering row edit)
+        document.querySelectorAll('.delete-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation(); 
+                const cat = this.categories[btn.dataset.index];
+                this.handleDelete(cat.id);
+            });
+        });
     }
 
     async handleSave() {
