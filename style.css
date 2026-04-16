@@ -26,9 +26,10 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; 
 
 .table-responsive { overflow-x: auto; overflow-y: auto; max-height: 60vh; border: 1px solid var(--border); border-radius: 4px; }
 table { width: 100%; border-collapse: collapse; min-width: 1000px; }
-th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+th, td { padding: 0.30rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
 th { background: var(--primary); color: white; position: sticky; top: 0; z-index: 1; }
 td input.cat-input { padding: 0.4rem; border: 1px solid var(--danger); width: 180px; border-radius: 3px; }
+td .btn { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
 
 .alert { padding: 1rem; border-radius: 4px; margin-bottom: 1rem; font-weight: 500; display: none; }
 .alert.visible { display: block; }
