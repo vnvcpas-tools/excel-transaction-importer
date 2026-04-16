@@ -7,7 +7,13 @@ export default class Home {
     constructor() {
         this.transactions = [];
         this.categoriesDict = {};
-        this.depositAccount = "";
+        
+        // New State Variables for Filtering and Tabs
+        this.depositAccount = "Payments to Deposit"; // Defaulted as requested
+        this.startDate = "";
+        this.endDate = "";
+        this.activeMainTab = "all";
+        this.activeSubTab = "table";
     }
 
     async render() {
@@ -16,16 +22,32 @@ export default class Home {
                 <h2>Transaction Importer (Storage Bypass Mode)</h2>
                 <div id="alertBox" class="alert"></div>
 
-                <div class="control-panel">
-                    <input type="file" id="csvFile" accept=".csv, .tsv">
-                    <input type="text" id="depositAccount" placeholder="Deposit Account (e.g., Checking)">
-                    <button id="syncQboBtn" class="btn" disabled>Push to QBO</button>
-                    <span style="margin-left:auto; font-size: 0.9rem; color: #666;" id="limitText"></span>
+                <div class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem;">
+                    <input type="file" id="csvFile" accept=".csv, .tsv" style="flex: 1; min-width: 200px;">
+                    
+                    <div style="display: flex; gap: 5px; align-items: center;">
+                        <label style="font-size: 0.8rem; font-weight: bold;">Filter Dates:</label>
+                        <input type="date" id="startDate" title="Start Date">
+                        <span>to</span>
+                        <input type="date" id="endDate" title="End Date">
+                    </div>
+
+                    <input type="text" id="depositAccount" value="Payments to Deposit" placeholder="Offset Account" style="width: 200px;">
+                    <button id="syncQboBtn" class="btn" disabled>Push Current View to QBO</button>
+                </div>
+                <div style="text-align: right; margin-bottom: 1rem;"><span style="font-size: 0.9rem; color: #666;" id="limitText"></span></div>
+
+                <div class="tabs main-tabs" style="border-bottom: 2px solid #3498db; margin-bottom: 0;">
+                    <button class="tab active" data-maintab="all">All Data</button>
+                    <button class="tab" data-maintab="sales">Sales Receipts (Orders)</button>
+                    <button class="tab" data-maintab="refunds">Refund Receipts</button>
+                    <button class="tab" data-maintab="expenses">Expenses (< 0)</button>
+                    <button class="tab" data-maintab="deposits">Deposits (> 0)</button>
                 </div>
 
-                <div class="tabs">
-                    <button class="tab active" data-tab="transactions">Transactions</button>
-                    <button class="tab" data-tab="journal">Journal Entry</button>
+                <div class="tabs sub-tabs" style="background: #f8f9fa; padding-top: 5px; margin-bottom: 1rem;">
+                    <button class="tab active" data-subtab="table" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Data Table View</button>
+                    <button class="tab" data-subtab="journal" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Summary Journal View</button>
                 </div>
 
                 <div id="tabContent">
@@ -39,23 +61,94 @@ export default class Home {
         document.getElementById('limitText').innerText = currentUser ? 'Unlimited Uploads Enabled' : 'Guest Limit: 10 Rows (Max 10 uploads/mo)';
         await this.loadCategories();
         
+        // Event Listeners for Inputs
         document.getElementById('csvFile').addEventListener('change', e => this.handleFileSelect(e));
         document.getElementById('depositAccount').addEventListener('input', e => {
             this.depositAccount = e.target.value;
-            if(document.querySelector('.tab.active').dataset.tab === 'journal') this.renderJournal();
+            if(this.activeSubTab === 'journal') this.renderActiveView();
         });
 
-        // Attach the Push to QBO event listener
+        document.getElementById('startDate').addEventListener('change', e => {
+            this.startDate = e.target.value;
+            this.renderActiveView();
+        });
+        document.getElementById('endDate').addEventListener('change', e => {
+            this.endDate = e.target.value;
+            this.renderActiveView();
+        });
+
+        // Push to QBO
         document.getElementById('syncQboBtn').addEventListener('click', () => this.handlePushToQbo());
 
-        document.querySelectorAll('.tab').forEach(tab => {
+        // Main Tab Listeners
+        document.querySelectorAll('.main-tabs .tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.main-tabs .tab').forEach(t => t.classList.remove('active'));
                 e.target.classList.add('active');
-                if(e.target.dataset.tab === 'transactions') this.renderTable();
-                else this.renderJournal();
+                this.activeMainTab = e.target.dataset.maintab;
+                this.renderActiveView();
             });
         });
+
+        // Sub Tab Listeners
+        document.querySelectorAll('.sub-tabs .tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                document.querySelectorAll('.sub-tabs .tab').forEach(t => t.classList.remove('active'));
+                e.target.classList.add('active');
+                this.activeSubTab = e.target.dataset.subtab;
+                this.renderActiveView();
+            });
+        });
+    }
+
+    renderActiveView() {
+        if (this.transactions.length === 0) return;
+        
+        if (this.activeSubTab === 'table') {
+            this.renderTable();
+        } else {
+            this.renderJournal();
+        }
+    }
+
+    // New Data Pipeline: Filters by Date, then partitions by Transaction Type
+    getFilteredAndPartitionedData() {
+        let data = this.transactions;
+
+        // 1. Date Filter Pipeline
+        if (this.startDate || this.endDate) {
+            const startStr = this.startDate ? new Date(this.startDate).setHours(0,0,0,0) : 0;
+            const endStr = this.endDate ? new Date(this.endDate).setHours(23,59,59,999) : Infinity;
+
+            data = data.filter(t => {
+                if (!t['posted-date']) return true; 
+                const tDate = new Date(t['posted-date']).getTime();
+                // Ensure valid dates are filtered, keep invalid rows just in case
+                if (isNaN(tDate)) return true; 
+                return tDate >= startStr && tDate <= endStr;
+            });
+        }
+
+        // 2. Tab Partitioning Pipeline
+        if (this.activeMainTab === 'sales') {
+            data = data.filter(t => (t['transaction-type'] || "").toLowerCase() === 'order');
+        } else if (this.activeMainTab === 'refunds') {
+            data = data.filter(t => (t['transaction-type'] || "").toLowerCase() === 'refund');
+        } else if (this.activeMainTab === 'expenses') {
+            data = data.filter(t => {
+                const type = (t['transaction-type'] || "").toLowerCase();
+                const amt = parseFloat(t.amount || 0);
+                return type !== 'order' && type !== 'refund' && amt < 0;
+            });
+        } else if (this.activeMainTab === 'deposits') {
+            data = data.filter(t => {
+                const type = (t['transaction-type'] || "").toLowerCase();
+                const amt = parseFloat(t.amount || 0);
+                return type !== 'order' && type !== 'refund' && amt >= 0;
+            });
+        }
+
+        return data;
     }
 
     async handlePushToQbo() {
@@ -65,14 +158,17 @@ export default class Home {
             return;
         }
 
-        if (this.transactions.length === 0) {
-            this.showAlert("No transactions to push.", "warning");
+        // Grab ONLY the data currently visible based on active filters/tabs
+        const visibleData = this.getFilteredAndPartitionedData();
+
+        if (visibleData.length === 0) {
+            this.showAlert("No transactions in the current view to push.", "warning");
             return;
         }
 
         const pushBtn = document.getElementById('syncQboBtn');
         const originalText = pushBtn.innerText;
-        pushBtn.innerText = "Provisioning Accounts & Pushing...";
+        pushBtn.innerText = "Provisioning & Pushing...";
         pushBtn.disabled = true;
 
         try {
@@ -80,8 +176,8 @@ export default class Home {
             let netDeposit = 0;
             let missingCats = false;
 
-            // Re-aggregate the data just like the Journal tab does
-            this.transactions.forEach(t => {
+            // Aggregate ONLY the visible partitioned data
+            visibleData.forEach(t => {
                 if (!t.category) missingCats = true;
                 const amt = parseFloat(t.amount || 0);
                 const key = t.category || "UNCATEGORIZED";
@@ -91,31 +187,31 @@ export default class Home {
             });
 
             if (missingCats) {
-                throw new Error("Missing Categories: Please map all line items before pushing.");
+                throw new Error("Missing Categories: Please map all line items in this view before pushing.");
             }
 
             const linesToPush = [];
-            const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Checking";
+            const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit";
             const realmId = qboSelect.value;
             const getOrCreateQboAccount = httpsCallable(functions, 'getOrCreateQboAccount');
 
-            // 1. Get or Create the Deposit Account
+            // 1. Get or Create the Offset Account
             let depId;
             try {
                 const depResponse = await getOrCreateQboAccount({ accountName: depName, realmId: realmId });
                 depId = depResponse.data.id;
             } catch (err) {
-                throw new Error(`Failed to provision deposit account "${depName}".`);
+                throw new Error(`Failed to provision offset account "${depName}".`);
             }
 
-            // Queue the Deposit Account
+            // Queue the Offset Account
             if (netDeposit > 0) {
-                linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: "Total Deposit" });
+                linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: `Total ${this.activeMainTab}` });
             } else if (netDeposit < 0) {
-                linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: "Total Withdrawal" });
+                linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: `Total ${this.activeMainTab}` });
             }
 
-            // 2. Queue the Categories (Auto-Provisioning them one by one)
+            // 2. Queue the Categories (Auto-Provisioning)
             for (const cat of Object.keys(summary)) {
                 const amt = summary[cat];
                 if (amt === 0) continue;
@@ -140,11 +236,11 @@ export default class Home {
             const response = await pushJournalEntry({
                 realmId: realmId,
                 lines: linesToPush,
-                privateNote: "Imported via Excel Transaction Importer"
+                privateNote: `Imported via VilBooks - Tab: ${this.activeMainTab.toUpperCase()}`
             });
 
             if (response.data.success) {
-                this.showAlert(`Success! Journal Entry created in QBO (ID: ${response.data.qboResponseId})`, "success");
+                this.showAlert(`Success! ${this.activeMainTab.toUpperCase()} Journal Entry created in QBO (ID: ${response.data.qboResponseId})`, "success");
             }
 
         } catch (error) {
@@ -209,22 +305,16 @@ export default class Home {
             return;
         }
 
-        // Check Firestore to see if this filename was processed before
         const fileDocRef = doc(db, "transactionFiles", file.name);
         const fileDocSnap = await getDoc(fileDocRef);
 
         if (fileDocSnap.exists()) {
             const uploadDate = new Date(fileDocSnap.data().dateTimeUploaded).toLocaleDateString();
-            const proceed = confirm(`DUPLICATE WARNING: A file named "${file.name}" was already uploaded on ${uploadDate}.\n\nAre you sure you want to process this again? It may result in duplicate entries in QuickBooks.\n\nClick OK to process anyway, or Cancel to abort.`);
-            
-            if (!proceed) {
-                e.target.value = ""; 
-                return;
-            }
-            this.showAlert(`Warning: Processing a previously uploaded file (${file.name}). Ensure you are not creating duplicates in QuickBooks.`, "info");
+            const proceed = confirm(`DUPLICATE WARNING: A file named "${file.name}" was already uploaded on ${uploadDate}.\n\nAre you sure you want to process this again?`);
+            if (!proceed) { e.target.value = ""; return; }
+            this.showAlert(`Warning: Processing a previously uploaded file (${file.name}).`, "info");
         }
 
-        // Proceed to parse the local file (Bypasses Storage)
         this.parseFileAndLogRecord(file);
     }
 
@@ -233,10 +323,7 @@ export default class Home {
             header: true,
             skipEmptyLines: true,
             complete: async (results) => {
-                // Log the filename to Firestore so we know it was processed
                 await this.logFileRecord(file);
-                
-                // Process the data directly from local memory
                 this.parseData(results.data, true);
             }
         });
@@ -252,6 +339,7 @@ export default class Home {
             const lineItem = this.calculateLineItem(row);
             return {
                 ...row,
+                uid: Date.now().toString(36) + Math.random().toString(36).substring(2), // Unique ID for safe deletion
                 lineItem: lineItem,
                 category: this.categoriesDict[lineItem] || "",
                 selected: false
@@ -259,14 +347,10 @@ export default class Home {
         });
 
         document.getElementById('syncQboBtn').disabled = false;
-        
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelector('[data-tab="transactions"]').classList.add('active');
-        this.renderTable();
+        this.renderActiveView();
     }
 
     async logFileRecord(file) {
-        // We only write to Firestore to log the filename and date. Storage upload is completely bypassed.
         try {
             await setDoc(doc(db, "transactionFiles", file.name), {
                 dateTimeUploaded: new Date().toISOString(),
@@ -286,64 +370,57 @@ export default class Home {
                 category: newCategory
             });
             this.categoriesDict[lineItem] = newCategory;
+            
+            // Update across the master dataset
             this.transactions.forEach(t => {
                 if(t.lineItem === lineItem) t.category = newCategory;
             });
-            this.renderTable(); 
+            this.renderActiveView(); 
         } catch (e) {
             alert("Error updating category database.");
         }
     }
 
     renderTable() {
+        const currentData = this.getFilteredAndPartitionedData();
+        
         let html = `
-            <div style="margin-bottom: 10px;">
-                <button class="btn danger" onclick="window.deleteSelected()">Delete Selected</button>
+            <div style="margin-bottom: 10px; display:flex; justify-content:space-between; align-items:center;">
+                <button class="btn danger" onclick="window.deleteSelected()">Delete Selected Rows</button>
+                <span style="font-size:0.9rem; color:#666;">Showing ${currentData.length} rows</span>
             </div>
             <div class="table-responsive">
             <table><thead><tr>
                 <th style="width: 40px;"><input type="checkbox" id="selectAllCb" onchange="window.toggleSelectAll(this.checked)"></th>
+                <th>Transaction Type</th>
                 <th>Line Item</th>
                 <th>Category</th>
                 <th>Amount</th>
                 <th>Date</th>
                 <th>Order ID</th>
                 <th>SKU</th>
-                <th>Quantity Purchased</th>
-                <th>Adjustment ID</th>
-                <th>Shipment ID</th>
-                <th>Fulfillment ID</th>
-                <th>Marketplace Name</th>
-                <th>Order Item ID</th>
-                <th>Merchant Order Item ID</th>
-                <th>Merchant Adjustment Item ID</th>
-                <th>Promotion ID</th>
             </tr></thead><tbody>
         `;
 
-        this.transactions.forEach((t, index) => {
+        if (currentData.length === 0) {
+            html += `<tr><td colspan="8" style="text-align:center;">No data matches the current filters.</td></tr>`;
+        }
+
+        currentData.forEach((t) => {
             let catDisplay = t.category;
             if (!t.category) {
                 catDisplay = `<input type="text" class="cat-input" placeholder="Add Category..." onblur="window.updateCat('${t.lineItem}', this.value)"><span class="text-danger"> Missing</span>`;
             }
 
             html += `<tr>
-                <td><input type="checkbox" class="row-checkbox" ${t.selected ? 'checked' : ''} onchange="window.toggleRow(${index}, this.checked)"></td>
+                <td><input type="checkbox" class="row-checkbox" data-uid="${t.uid}" ${t.selected ? 'checked' : ''} onchange="window.toggleRow('${t.uid}', this.checked)"></td>
+                <td>${t['transaction-type'] || ''}</td>
                 <td><strong>${t.lineItem}</strong></td>
                 <td>${catDisplay}</td>
                 <td>${t.amount || 0}</td>
                 <td>${t['posted-date'] || ''}</td>
                 <td>${t['order-id'] || ''}</td>
                 <td>${t['sku'] || ''}</td>
-                <td>${t['quantity-purchased'] || ''}</td>
-                <td>${t['adjustment-id'] || ''}</td>
-                <td>${t['shipment-id'] || ''}</td>
-                <td>${t['fulfillment-id'] || ''}</td>
-                <td>${t['marketplace-name'] || ''}</td>
-                <td>${t['order-item-code'] || ''}</td>
-                <td>${t['merchant-order-item-id'] || ''}</td>
-                <td>${t['merchant-adjustment-item-id'] || ''}</td>
-                <td>${t['promotion-id'] || ''}</td>
             </tr>`;
         });
 
@@ -354,29 +431,38 @@ export default class Home {
         window.updateCat = (line, val) => this.updateCategory(line, val);
         
         window.toggleSelectAll = (checked) => {
-            this.transactions.forEach(t => t.selected = checked);
+            // Only select visible rows in current partition
+            currentData.forEach(t => {
+                const masterRow = this.transactions.find(m => m.uid === t.uid);
+                if (masterRow) masterRow.selected = checked;
+            });
             document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = checked);
         };
         
-        window.toggleRow = (index, checked) => {
-            this.transactions[index].selected = checked;
-            const allChecked = this.transactions.length > 0 && this.transactions.every(t => t.selected);
+        window.toggleRow = (uid, checked) => {
+            const masterRow = this.transactions.find(t => t.uid === uid);
+            if (masterRow) masterRow.selected = checked;
+            
+            const allChecked = currentData.length > 0 && currentData.every(t => t.selected);
             const selectAllCb = document.getElementById('selectAllCb');
             if (selectAllCb) selectAllCb.checked = allChecked;
         };
 
         window.deleteSelected = () => {
+            // Delete globally
             this.transactions = this.transactions.filter(t => !t.selected);
-            this.renderTable();
+            this.renderActiveView();
         };
     }
 
     renderJournal() {
+        const currentData = this.getFilteredAndPartitionedData();
+        
         let summary = {};
         let netDeposit = 0;
         let missingCats = false;
 
-        this.transactions.forEach(t => {
+        currentData.forEach(t => {
             const cat = t.category;
             if (!cat) missingCats = true;
             
@@ -387,8 +473,8 @@ export default class Home {
             netDeposit += amt;
         });
 
-        if (missingCats) {
-            this.showAlert("Warning: Some line items are missing categories. Please map them in the Transactions tab before syncing.", "warning");
+        if (currentData.length > 0 && missingCats) {
+            this.showAlert("Warning: Some line items in this view are missing categories. Map them in the Data Table before syncing.", "warning");
         } else {
             this.hideAlert();
         }
@@ -402,10 +488,17 @@ export default class Home {
             </tr></thead><tbody>
         `;
 
-        const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Checking";
+        if (currentData.length === 0) {
+            html += `<tr><td colspan="3" style="text-align:center;">No data matches the current filters.</td></tr>`;
+            html += `</tbody></table></div>`;
+            document.getElementById('tabContent').innerHTML = html;
+            return;
+        }
+
+        const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit";
         let journalLines = [];
 
-        // 1. Process Deposit Account
+        // 1. Process Offset Clearing Account
         if (netDeposit > 0) {
             journalLines.push({ account: `<strong>${depName}</strong>`, debit: netDeposit, credit: 0, isDeposit: true });
         } else if (netDeposit < 0) {
@@ -429,19 +522,13 @@ export default class Home {
 
         // 3. Sort Journal Lines
         journalLines.sort((a, b) => {
-            // Deposit debit stays at absolute top
             if (a.isDeposit && a.debit > 0) return -1;
             if (b.isDeposit && b.debit > 0) return 1;
-            
-            // Deposit credit stays at absolute bottom
             if (a.isDeposit && a.credit > 0) return 1;
             if (b.isDeposit && b.credit > 0) return -1;
-
-            // Debits must be placed above Credits
             if (a.debit > 0 && b.credit > 0) return -1;
             if (a.credit > 0 && b.debit > 0) return 1;
-
-            return 0; // Maintain natural grouping otherwise
+            return 0; 
         });
 
         // 4. Render Sorted Rows
