@@ -6,6 +6,10 @@ export default class Admin {
     constructor() {
         this.categories = [];
         this.editingId = null;
+        
+        // Search state variables
+        this.searchTerm = "";
+        this.searchVisible = false;
     }
 
     async render() {
@@ -22,9 +26,9 @@ export default class Admin {
                 <h3>Manage Category Mappings</h3>
                 <div class="control-panel" style="margin-bottom: 2rem; display: flex; flex-direction: column; gap: 10px;">
                     <h4 id="formTitle">Add New Mapping</h4>
-                    <input type="text" id="catLineItem" placeholder="Line Item (Exact match from import file)">
-                    <input type="text" id="catName" placeholder="QBO Category Name">
-                    <input type="text" id="catDesc" placeholder="Description / Notes (Optional)">
+                    <input type="text" id="catLineItem" placeholder="Line Item (Exact match from import file)" style="padding: 0.5rem;">
+                    <input type="text" id="catName" placeholder="QBO Category Name" style="padding: 0.5rem;">
+                    <input type="text" id="catDesc" placeholder="Description / Notes (Optional)" style="padding: 0.5rem;">
                     <div style="display: flex; gap: 10px;">
                         <button id="saveCatBtn" class="btn">Save Mapping</button>
                         <button id="cancelEditBtn" class="btn outline" style="display: none;">Cancel Edit</button>
@@ -33,7 +37,7 @@ export default class Admin {
                 </div>
 
                 <div id="catTableContainer">
-                    <p style="padding: 1rem; text-align: center; color: #7f8c8d;">Loading categories...</p>
+                    <p style="padding: 2rem; text-align: center; color: #7f8c8d;">Loading categories...</p>
                 </div>
             </div>
         `;
@@ -71,26 +75,38 @@ export default class Admin {
             <table>
                 <thead>
                     <tr>
-                        <th>Line Item</th>
-                        <th>Category</th>
-                        <th>Description</th>
-                        <th style="width: 150px; text-align: center;">Actions</th>
+                        <th style="padding: 0.5rem; width: 45%;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span>Line Item</span>
+                                <span id="searchToggleBtn" style="cursor: pointer; padding: 0.2rem; user-select: none;" title="Toggle Search">🔍</span>
+                            </div>
+                            <div id="searchContainer" style="display: ${this.searchVisible ? 'block' : 'none'}; margin-top: 8px;">
+                                <input type="text" id="searchInput" placeholder="Search line items or categories..." value="${this.searchTerm}" style="padding: 0.5rem; width: 100%; box-sizing: border-box; font-weight: normal; font-size: 0.9rem; border: 1px solid #ccc; border-radius: 4px;">
+                            </div>
+                        </th>
+                        <th style="padding: 0.5rem;">Category</th>
+                        <th style="padding: 0.5rem;">Description</th>
+                        <th style="width: 150px; text-align: center; padding: 0.5rem;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
         `;
 
         if (this.categories.length === 0) {
-            html += `<tr><td colspan="4" style="text-align: center;">No categories found. Add one above.</td></tr>`;
+            html += `<tr><td colspan="4" style="text-align: center; padding: 0.5rem;">No categories found. Add one above.</td></tr>`;
         } else {
             // Use the array index to perfectly link the row to the data, avoiding string escape bugs
             this.categories.forEach((c, index) => {
+                // Apply the existing filter if a table redraw happens while searching
+                const isMatch = c.lineItem.toLowerCase().includes(this.searchTerm) || c.category.toLowerCase().includes(this.searchTerm);
+                const displayStyle = isMatch ? '' : 'display: none;';
+
                 html += `
-                    <tr class="cat-row" data-index="${index}" style="cursor: pointer; transition: background 0.2s;" onmouseover="this.style.background='#f1f8ff'" onmouseout="this.style.background='transparent'">
-                        <td><strong>${c.lineItem}</strong></td>
-                        <td>${c.category}</td>
-                        <td>${c.description || '<span style="color:#aaa;">No description</span>'}</td>
-                        <td style="text-align: center;">
+                    <tr class="cat-row" data-index="${index}" style="cursor: pointer; transition: background 0.2s; ${displayStyle}" onmouseover="this.style.background='#f1f8ff'" onmouseout="this.style.background='transparent'">
+                        <td style="padding: 0.5rem;"><strong class="line-item-text">${c.lineItem}</strong></td>
+                        <td style="padding: 0.5rem;" class="cat-name-text">${c.category}</td>
+                        <td style="padding: 0.5rem;">${c.description || '<span style="color:#aaa;">No description</span>'}</td>
+                        <td style="text-align: center; padding: 0.5rem;">
                             <button class="btn outline edit-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 5px;" title="Edit this row">Edit</button>
                             <button class="btn danger delete-btn" data-index="${index}" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;" title="Delete this row">Delete</button>
                         </td>
@@ -107,6 +123,38 @@ export default class Admin {
     }
 
     attachTableListeners() {
+        // Search Box Logic
+        const searchToggle = document.getElementById('searchToggleBtn');
+        const searchContainer = document.getElementById('searchContainer');
+        const searchInput = document.getElementById('searchInput');
+
+        if (searchToggle && searchContainer && searchInput) {
+            searchToggle.addEventListener('click', () => {
+                this.searchVisible = !this.searchVisible;
+                searchContainer.style.display = this.searchVisible ? 'block' : 'none';
+                if (this.searchVisible) {
+                    searchInput.focus();
+                    // Put cursor at the end of text if there is any
+                    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+                }
+            });
+
+            // Live DOM filtering (Extremely fast, no screen flashing)
+            searchInput.addEventListener('input', (e) => {
+                this.searchTerm = e.target.value.toLowerCase();
+                document.querySelectorAll('.cat-row').forEach(row => {
+                    const lineText = row.querySelector('.line-item-text').innerText.toLowerCase();
+                    const catText = row.querySelector('.cat-name-text').innerText.toLowerCase();
+                    
+                    if (lineText.includes(this.searchTerm) || catText.includes(this.searchTerm)) {
+                        row.style.display = '';
+                    } else {
+                        row.style.display = 'none';
+                    }
+                });
+            });
+        }
+
         // 1. Click Row to Edit
         document.querySelectorAll('.cat-row').forEach(row => {
             row.addEventListener('click', () => {
