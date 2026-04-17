@@ -4,12 +4,18 @@ import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/fireba
 import { getStorage, ref, uploadBytes } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-storage.js";
 import { currentUser } from './app.js';
 
+// Import our new modular transaction handlers
+import { pushSalesReceipts } from './transHandlers/salesReceipt.js';
+import { pushRefundReceipts } from './transHandlers/refundReceipt.js';
+import { pushDeposits } from './transHandlers/deposit.js';
+import { pushExpenses } from './transHandlers/expense.js';
+import { pushPayouts } from './transHandlers/payout.js';
+
 export default class Home {
     constructor() {
         this.transactions = [];
         this.categoriesDict = {};
         
-        // State Variables for Filtering and Tabs
         this.depositAccount = "Payments to Deposit"; 
         this.startDate = "";
         this.endDate = "";
@@ -166,116 +172,31 @@ export default class Home {
         pushBtn.disabled = true;
 
         try {
-            const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit";
-            const realmId = qboSelect.value;
-            const getOrCreateQboAccount = httpsCallable(functions, 'getOrCreateQboAccount');
-            const pushJournalEntry = httpsCallable(functions, 'pushJournalEntry');
+            const config = {
+                realmId: qboSelect.value,
+                depositAccountName: this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit",
+                functions: functions,
+                endDate: this.endDate
+            };
 
-            let depId;
-            try {
-                const depResponse = await getOrCreateQboAccount({ accountName: depName, realmId: realmId });
-                depId = depResponse.data.id;
-            } catch (err) {
-                throw new Error(`Failed to provision offset account "${depName}".`);
-            }
-
-            if (this.activeMainTab === 'payouts') {
-                for (const t of visibleData) {
-                    if (!t.category) throw new Error("Missing Categories: Please map all payout line items.");
-                    const amt = parseFloat(t.total || 0);
-                    if (amt === 0) continue;
-
-                    let qboId;
-                    try {
-                        const catResponse = await getOrCreateQboAccount({ accountName: t.category, realmId: realmId });
-                        qboId = catResponse.data.id;
-                    } catch (err) {
-                        throw new Error(`Failed to provision category account "${t.category}".`);
-                    }
-
-                    const individualLines = [];
-                    if (amt < 0) {
-                        individualLines.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: t.lineItem });
-                        individualLines.push({ postingType: "Credit", amount: Math.abs(amt), qboAccountId: depId, description: "Payout Transfer Offset" });
-                    } else {
-                        individualLines.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: t.lineItem });
-                        individualLines.push({ postingType: "Debit", amount: amt, qboAccountId: depId, description: "Payout Transfer Offset" });
-                    }
-
-                    const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
-
-                    await pushJournalEntry({
-                        realmId: realmId,
-                        lines: individualLines,
-                        txnDate: tDate, 
-                        privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}`
-                    });
+            // Route to specific modular handlers based on the active view
+            if (this.activeSubTab === 'table') {
+                if (this.activeMainTab === 'sales') {
+                    await pushSalesReceipts(visibleData, config, this);
+                } else if (this.activeMainTab === 'refunds') {
+                    await pushRefundReceipts(visibleData, config, this);
+                } else if (this.activeMainTab === 'deposits') {
+                    await pushDeposits(visibleData, config, this);
+                } else if (this.activeMainTab === 'expenses') {
+                    await pushExpenses(visibleData, config, this);
+                } else if (this.activeMainTab === 'payouts') {
+                    await pushPayouts(visibleData, config, this);
+                } else {
+                    throw new Error("Detailed sync is only available within specific tabs (Sales, Refunds, Expenses, Deposits, Payouts).");
                 }
-                this.showAlert(`Success! ${visibleData.length} Individual Payout Entries created in QBO.`, "success");
-
             } else {
-                let summary = {};
-                let netDeposit = 0;
-                let missingCats = false;
-
-                visibleData.forEach(t => {
-                    if (!t.category) missingCats = true;
-                    const amt = parseFloat(t.total || 0);
-                    const key = t.lineItem || "UNCATEGORIZED"; 
-                    
-                    if (!summary[key]) summary[key] = { amt: 0, catName: t.category };
-                    summary[key].amt += amt;
-                    netDeposit += amt;
-                });
-
-                if (missingCats) throw new Error("Missing Categories: Please map all line items in this view before pushing.");
-
-                const linesToPush = [];
-
-                if (netDeposit > 0) {
-                    linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: `Total ${this.activeMainTab}` });
-                } else if (netDeposit < 0) {
-                    linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: `Total ${this.activeMainTab}` });
-                }
-
-                for (const lineKey of Object.keys(summary)) {
-                    const amt = summary[lineKey].amt;
-                    const catName = summary[lineKey].catName;
-                    if (amt === 0) continue;
-
-                    let qboId;
-                    try {
-                        const catResponse = await getOrCreateQboAccount({ accountName: catName, realmId: realmId });
-                        qboId = catResponse.data.id;
-                    } catch (err) {
-                        throw new Error(`Failed to provision category account "${catName}".`);
-                    }
-
-                    if (amt < 0) {
-                        linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: lineKey });
-                    } else if (amt > 0) {
-                        linesToPush.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: lineKey });
-                    }
-                }
-
-                let summaryDateStr = this.endDate;
-                if (!summaryDateStr) {
-                    const dates = visibleData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
-                    if (dates.length > 0) {
-                        summaryDateStr = new Date(Math.max(...dates)).toISOString().split('T')[0];
-                    }
-                }
-
-                const response = await pushJournalEntry({
-                    realmId: realmId,
-                    lines: linesToPush,
-                    txnDate: summaryDateStr,
-                    privateNote: `Imported via VilBooks - Tab: ${this.activeMainTab.toUpperCase()}`
-                });
-
-                if (response.data.success) {
-                    this.showAlert(`Success! ${this.activeMainTab.toUpperCase()} Summary Journal Entry created in QBO (ID: ${response.data.qboResponseId})`, "success");
-                }
+                // If Journal View, push a standard Journal Entry
+                await this.pushStandardJournalEntry(visibleData, config);
             }
 
         } catch (error) {
@@ -284,6 +205,89 @@ export default class Home {
         } finally {
             pushBtn.innerText = originalText;
             pushBtn.disabled = false;
+        }
+    }
+
+    async pushStandardJournalEntry(visibleData, config) {
+        const getOrCreateQboAccount = httpsCallable(config.functions, 'getOrCreateQboAccount');
+        const pushJournalEntry = httpsCallable(config.functions, 'pushJournalEntry');
+
+        let depId;
+        const depResponse = await getOrCreateQboAccount({ accountName: config.depositAccountName, realmId: config.realmId });
+        depId = depResponse.data.id;
+
+        if (this.activeMainTab === 'payouts') {
+            for (const t of visibleData) {
+                if (!t.category) throw new Error("Missing Categories: Please map all payout line items.");
+                const amt = parseFloat(t.total || 0);
+                if (amt === 0) continue;
+
+                const catResponse = await getOrCreateQboAccount({ accountName: t.category, realmId: config.realmId });
+                const qboId = catResponse.data.id;
+
+                const individualLines = [];
+                if (amt < 0) {
+                    individualLines.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: t.lineItem });
+                    individualLines.push({ postingType: "Credit", amount: Math.abs(amt), qboAccountId: depId, description: "Payout Transfer Offset" });
+                } else {
+                    individualLines.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: t.lineItem });
+                    individualLines.push({ postingType: "Debit", amount: amt, qboAccountId: depId, description: "Payout Transfer Offset" });
+                }
+
+                const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
+                await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
+            }
+            this.showAlert(`Success! ${visibleData.length} Individual Payout Entries created in QBO.`, "success");
+        } else {
+            let summary = {};
+            let netDeposit = 0;
+            let missingCats = false;
+
+            visibleData.forEach(t => {
+                if (!t.category) missingCats = true;
+                const amt = parseFloat(t.total || 0);
+                const key = t.lineItem || "UNCATEGORIZED"; 
+                if (!summary[key]) summary[key] = { amt: 0, catName: t.category };
+                summary[key].amt += amt;
+                netDeposit += amt;
+            });
+
+            if (missingCats) throw new Error("Missing Categories: Please map all line items before pushing.");
+
+            const linesToPush = [];
+            if (netDeposit > 0) {
+                linesToPush.push({ postingType: "Debit", amount: netDeposit, qboAccountId: depId, description: `Total ${this.activeMainTab}` });
+            } else if (netDeposit < 0) {
+                linesToPush.push({ postingType: "Credit", amount: Math.abs(netDeposit), qboAccountId: depId, description: `Total ${this.activeMainTab}` });
+            }
+
+            for (const lineKey of Object.keys(summary)) {
+                const amt = summary[lineKey].amt;
+                const catName = summary[lineKey].catName;
+                if (amt === 0) continue;
+
+                const catResponse = await getOrCreateQboAccount({ accountName: catName, realmId: config.realmId });
+                const qboId = catResponse.data.id;
+
+                if (amt < 0) {
+                    linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: lineKey });
+                } else if (amt > 0) {
+                    linesToPush.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: lineKey });
+                }
+            }
+
+            let summaryDateStr = config.endDate;
+            if (!summaryDateStr) {
+                const dates = visibleData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
+                if (dates.length > 0) {
+                    summaryDateStr = new Date(Math.max(...dates)).toISOString().split('T')[0];
+                }
+            }
+
+            const response = await pushJournalEntry({ realmId: config.realmId, lines: linesToPush, txnDate: summaryDateStr, privateNote: `Imported via VilBooks - Tab: ${this.activeMainTab.toUpperCase()}` });
+            if (response.data.success) {
+                this.showAlert(`Success! ${this.activeMainTab.toUpperCase()} Summary Journal Entry created in QBO.`, "success");
+            }
         }
     }
 
@@ -302,42 +306,15 @@ export default class Home {
         document.getElementById('alertBox').className = "alert";
     }
 
-    calculateLineItem(row) {
-        const typeStr = (row['type'] || "").trim();
-        const descStr = (row['description'] || "").trim();
-        const tLower = typeStr.toLowerCase();
-
-        if (tLower === 'order') return "Order";
-        if (tLower === 'refund') return "Refund";
-
-        let lineItem = `${typeStr} - ${descStr}`.replace(/^ - | - $/g, '').trim();
-
-        // Truncate long bank transfer descriptions to standardize the mapping key
-        if (tLower === 'transfer') {
-            const commaIndex = lineItem.indexOf(',');
-            if (commaIndex !== -1) {
-                lineItem = lineItem.substring(0, commaIndex).trim();
-            }
-        }
-
-        return lineItem;
-    }
-
     checkGuestLimits() {
         if (currentUser) return true;
-        
         const currentMonth = new Date().getMonth();
         let limitData = JSON.parse(localStorage.getItem('guestLimits')) || { month: currentMonth, count: 0 };
-        
-        if (limitData.month !== currentMonth) {
-            limitData = { month: currentMonth, count: 0 };
-        }
-        
+        if (limitData.month !== currentMonth) limitData = { month: currentMonth, count: 0 };
         if (limitData.count >= 10) {
-            this.showAlert("Monthly guest upload limit reached (10 uploads). Please login as Admin.", "warning");
+            this.showAlert("Monthly guest upload limit reached.", "warning");
             return false;
         }
-        
         limitData.count += 1;
         localStorage.setItem('guestLimits', JSON.stringify(limitData));
         return true;
@@ -349,24 +326,18 @@ export default class Home {
         if (!file) return;
 
         if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
-            this.showAlert("<strong>Format Error:</strong> You uploaded an Excel workbook (.xlsx). Please open the file in Excel, choose <strong>File > Save As</strong>, and save it as a <strong>CSV (Comma delimited)</strong> file before uploading.", "danger");
+            this.showAlert("<strong>Format Error:</strong> You uploaded an Excel workbook (.xlsx). Please save it as a <strong>CSV</strong> file before uploading.", "danger");
             e.target.value = "";
             return;
         }
-
-        if (!this.checkGuestLimits()) {
-            e.target.value = "";
-            return;
-        }
+        if (!this.checkGuestLimits()) { e.target.value = ""; return; }
 
         const fileDocRef = doc(db, "transactionFiles", file.name);
         const fileDocSnap = await getDoc(fileDocRef);
-
         if (fileDocSnap.exists()) {
             const uploadDate = new Date(fileDocSnap.data().dateTimeUploaded).toLocaleDateString();
-            const proceed = confirm(`DUPLICATE WARNING: A file named "${file.name}" was already uploaded on ${uploadDate}.\n\nAre you sure you want to process this again?`);
+            const proceed = confirm(`DUPLICATE WARNING: "${file.name}" was already uploaded on ${uploadDate}.\n\nProcess again?`);
             if (!proceed) { e.target.value = ""; return; }
-            this.showAlert(`Warning: Processing a previously uploaded file (${file.name}).`, "info");
         }
 
         this.parseFileAndLogRecord(file);
@@ -390,7 +361,6 @@ export default class Home {
         }
 
         const expandedTransactions = [];
-        
         const targetColumns = [
             'product sales', 'product sales tax', 'shipping credits', 'shipping credits tax',
             'gift wrap credits', 'giftwrap credits tax', 'Regulatory Fee', 'Tax On Regulatory Fee',
@@ -409,6 +379,8 @@ export default class Home {
                         expandedTransactions.push({
                             ...row,
                             total: amt,
+                            quantity: row['quantity'] || 1,
+                            description: row['description'] || "",
                             lineItem: colName,
                             category: this.categoriesDict[colName] || "",
                             uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
@@ -417,13 +389,19 @@ export default class Home {
                     }
                 });
             } else {
-                const lineItem = this.calculateLineItem(row);
+                let lineItem = `${typeStr} - ${row['description'] || ""}`.replace(/^ - | - $/g, '').trim();
+                if (tLower === 'transfer') {
+                    const commaIndex = lineItem.indexOf(',');
+                    if (commaIndex !== -1) lineItem = lineItem.substring(0, commaIndex).trim();
+                }
+
                 const amt = parseFloat(row['total'] || 0);
-                
                 if (amt !== 0 || typeStr !== "") {
                     expandedTransactions.push({
                         ...row,
                         total: amt,
+                        quantity: 1,
+                        description: row['description'] || "",
                         lineItem: lineItem,
                         category: this.categoriesDict[lineItem] || "",
                         uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
@@ -440,7 +418,6 @@ export default class Home {
 
     async logFileRecord(file) {
         let status = "Local Render Only";
-        
         if (currentUser && db.app) {
             try {
                 const storage = getStorage(db.app);
@@ -448,38 +425,26 @@ export default class Home {
                 await uploadBytes(fileRef, file);
                 status = "Uploaded to Storage";
             } catch (e) {
-                console.error("Storage upload skipped or failed:", e);
                 status = "Storage Failed - Bypass Used";
             }
         }
-
         try {
             await setDoc(doc(db, "transactionFiles", file.name), {
                 dateTimeUploaded: new Date().toISOString(),
                 uploadedBy: currentUser ? currentUser.email : "Guest",
                 storageStatus: status
             });
-        } catch (e) {
-            console.error("Firestore logging warning:", e);
-        }
+        } catch (e) {}
     }
 
     async updateCategory(lineItem, newCategory) {
         if(!newCategory || newCategory.trim() === "") return;
         try {
-            await setDoc(doc(db, "category", lineItem), {
-                lineItem: lineItem,
-                category: newCategory
-            });
+            await setDoc(doc(db, "category", lineItem), { lineItem: lineItem, category: newCategory });
             this.categoriesDict[lineItem] = newCategory;
-            
-            this.transactions.forEach(t => {
-                if(t.lineItem === lineItem) t.category = newCategory;
-            });
+            this.transactions.forEach(t => { if(t.lineItem === lineItem) t.category = newCategory; });
             this.renderActiveView(); 
-        } catch (e) {
-            alert("Error updating category database.");
-        }
+        } catch (e) { alert("Error updating category database."); }
     }
 
     renderTable() {
@@ -496,16 +461,18 @@ export default class Home {
                 <th>Transaction Type</th>
                 <th>Line Item</th>
                 <th>Category</th>
-                <th>Amount (Total)</th>
+                <th>Description</th>
+                <th>SKU</th>
+                <th style="text-align: right;">Qty</th>
+                <th style="text-align: right;">Amount</th>
                 <th>Date/Time</th>
                 <th>Settlement ID</th>
                 <th>Order ID</th>
-                <th>SKU</th>
             </tr></thead><tbody>
         `;
 
         if (currentData.length === 0) {
-            html += `<tr><td colspan="9" style="text-align:center;">No data matches the current filters.</td></tr>`;
+            html += `<tr><td colspan="11" style="text-align:center;">No data matches the current filters.</td></tr>`;
         }
 
         currentData.forEach((t) => {
@@ -519,11 +486,13 @@ export default class Home {
                 <td>${t['type'] || ''}</td>
                 <td><strong>${t.lineItem}</strong></td>
                 <td>${catDisplay}</td>
-                <td>${t.total}</td>
+                <td><span style="font-size: 0.8rem; color: #555;">${t.description || ''}</span></td>
+                <td>${t['sku'] || ''}</td>
+                <td style="text-align: right;">${t.quantity || 1}</td>
+                <td style="text-align: right; font-weight: bold;">${parseFloat(t.total).toFixed(2)}</td>
                 <td>${t['date/time'] || ''}</td>
                 <td>${t['settlement id'] || ''}</td>
                 <td>${t['order id'] || ''}</td>
-                <td>${t['sku'] || ''}</td>
             </tr>`;
         });
 
@@ -543,7 +512,6 @@ export default class Home {
         window.toggleRow = (uid, checked) => {
             const masterRow = this.transactions.find(t => t.uid === uid);
             if (masterRow) masterRow.selected = checked;
-            
             const allChecked = currentData.length > 0 && currentData.every(t => t.selected);
             const selectAllCb = document.getElementById('selectAllCb');
             if (selectAllCb) selectAllCb.checked = allChecked;
@@ -563,8 +531,8 @@ export default class Home {
                 <div class="table-responsive">
                 <table><thead><tr>
                     <th>Account / Category</th>
-                    <th>Debit</th>
-                    <th>Credit</th>
+                    <th style="text-align: right;">Debit</th>
+                    <th style="text-align: right;">Credit</th>
                     <th>Line Description</th>
                 </tr></thead><tbody>
                 <tr><td colspan="4" style="text-align:center;">No data matches the current filters.</td></tr>
@@ -578,20 +546,11 @@ export default class Home {
 
         // === PAYOUTS TAB (Individual Entries) ===
         if (this.activeMainTab === 'payouts') {
-            let missingCats = false;
-            currentData.forEach(t => { if (!t.category) missingCats = true; });
-
-            if (missingCats) {
-                this.showAlert("Warning: Some line items in this view are missing categories. Map them in the Data Table before syncing.", "warning");
-            } else {
-                this.hideAlert();
-            }
-
             html += `
                 <table><thead><tr>
                     <th>Account / Category</th>
-                    <th>Debit</th>
-                    <th>Credit</th>
+                    <th style="text-align: right;">Debit</th>
+                    <th style="text-align: right;">Credit</th>
                     <th>Line Description</th>
                 </tr></thead><tbody>
             `;
@@ -601,46 +560,35 @@ export default class Home {
                 if (amt === 0) return;
 
                 const tDate = t['date/time'] ? new Date(t['date/time']).toLocaleDateString() : 'Unknown Date';
-                const catRef = t.category || `<span class="text-danger">Missing Category</span>`;
-                const lineDesc = t.lineItem;
+                const catRef = t.category || `<span class="text-danger">Missing</span>`;
                 const absAmt = Math.abs(amt).toFixed(2);
 
                 html += `<tr style="background:#e9ecef;"><td colspan="4"><strong>Date: ${tDate}</strong> (Settlement ID: ${t['settlement id'] || 'N/A'})</td></tr>`;
 
                 if (amt < 0) {
-                    html += `<tr><td>${catRef}</td><td>${absAmt}</td><td></td><td>${lineDesc}</td></tr>`;
-                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td></td><td>${absAmt}</td><td>Payout Transfer Offset</td></tr>`;
+                    html += `<tr><td>${catRef}</td><td style="text-align: right;">${absAmt}</td><td></td><td>${t.lineItem}</td></tr>`;
+                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td></td><td style="text-align: right;">${absAmt}</td><td>Payout Transfer Offset</td></tr>`;
                 } else {
-                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td>${absAmt}</td><td></td><td>Payout Transfer Offset</td></tr>`;
-                    html += `<tr><td>${catRef}</td><td></td><td>${absAmt}</td><td>${lineDesc}</td></tr>`;
+                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td style="text-align: right;">${absAmt}</td><td></td><td>Payout Transfer Offset</td></tr>`;
+                    html += `<tr><td>${catRef}</td><td></td><td style="text-align: right;">${absAmt}</td><td>${t.lineItem}</td></tr>`;
                 }
             });
 
             html += `</tbody></table></div>`;
             document.getElementById('tabContent').innerHTML = html;
 
-        // === SUMMARY TABS (Sales, Refunds, Expenses, Deposits) ===
+        // === SUMMARY TABS ===
         } else {
             let summary = {};
             let netDeposit = 0;
-            let missingCats = false;
 
             currentData.forEach(t => {
-                if (!t.category) missingCats = true;
-                
                 const amt = parseFloat(t.total || 0);
                 const key = t.lineItem || "UNCATEGORIZED"; 
                 if (!summary[key]) summary[key] = { amt: 0, catName: t.category || `<span class="text-danger">Missing</span>` };
-                
                 summary[key].amt += amt;
                 netDeposit += amt;
             });
-
-            if (missingCats) {
-                this.showAlert("Warning: Some line items in this view are missing categories. Map them in the Data Table before syncing.", "warning");
-            } else {
-                this.hideAlert();
-            }
 
             let summaryDateStr = this.endDate;
             if (!summaryDateStr) {
@@ -658,8 +606,8 @@ export default class Home {
                 <h4 style="margin-top: 0; margin-bottom: 10px; color: #2c3e50;">Journal Entry Date: <span style="font-weight: normal;">${summaryDateStr}</span></h4>
                 <table><thead><tr>
                     <th>Account / Category</th>
-                    <th>Debit</th>
-                    <th>Credit</th>
+                    <th style="text-align: right;">Debit</th>
+                    <th style="text-align: right;">Credit</th>
                     <th>Line Description</th>
                 </tr></thead><tbody>
             `;
@@ -676,13 +624,11 @@ export default class Home {
 
             Object.keys(summary).forEach(lineKey => {
                 const amt = summary[lineKey].amt;
-                const catName = summary[lineKey].catName;
-                
                 if (amt < 0) {
-                    journalLines.push({ catName: catName, debit: Math.abs(amt), credit: 0, desc: lineKey, isDeposit: false });
+                    journalLines.push({ catName: summary[lineKey].catName, debit: Math.abs(amt), credit: 0, desc: lineKey, isDeposit: false });
                     totalDebit += Math.abs(amt);
                 } else if (amt > 0) {
-                    journalLines.push({ catName: catName, debit: 0, credit: amt, desc: lineKey, isDeposit: false });
+                    journalLines.push({ catName: summary[lineKey].catName, debit: 0, credit: amt, desc: lineKey, isDeposit: false });
                     totalCredit += amt;
                 }
             });
@@ -692,23 +638,19 @@ export default class Home {
                 if (b.isDeposit && b.debit > 0) return 1;
                 if (a.isDeposit && a.credit > 0) return 1;
                 if (b.isDeposit && b.credit > 0) return -1;
-                if (a.debit > 0 && b.credit > 0) return -1;
-                if (a.credit > 0 && b.debit > 0) return 1;
-                return 0; 
+                return a.debit > 0 ? -1 : 1; 
             });
 
             journalLines.forEach(line => {
                 const debitStr = line.debit > 0 ? line.debit.toFixed(2) : "";
                 const creditStr = line.credit > 0 ? line.credit.toFixed(2) : "";
-                const bgClass = line.isDeposit ? ' style="background:#e8f8f5;"' : '';
-                
-                html += `<tr${bgClass}><td>${line.catName}</td><td>${debitStr}</td><td>${creditStr}</td><td>${line.desc}</td></tr>`;
+                html += `<tr><td>${line.catName}</td><td style="text-align: right;">${debitStr}</td><td style="text-align: right;">${creditStr}</td><td>${line.desc}</td></tr>`;
             });
 
             html += `<tr style="font-weight:bold; background:#e9ecef">
                 <td>TOTAL</td>
-                <td>${totalDebit.toFixed(2)}</td>
-                <td>${totalCredit.toFixed(2)}</td>
+                <td style="text-align: right;">${totalDebit.toFixed(2)}</td>
+                <td style="text-align: right;">${totalCredit.toFixed(2)}</td>
                 <td></td>
             </tr>`;
 
