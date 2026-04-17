@@ -1,5 +1,6 @@
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-functions.js";
 
+
 export async function pushExpenses(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
 
