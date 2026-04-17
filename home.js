@@ -4,7 +4,6 @@ import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/fireba
 import { getStorage, ref, uploadBytes } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-storage.js";
 import { currentUser } from './app.js';
 
-// Import our new modular transaction handlers
 import { pushSalesReceipts } from './transHandlers/salesReceipt.js';
 import { pushRefundReceipts } from './transHandlers/refundReceipt.js';
 import { pushDeposits } from './transHandlers/deposit.js';
@@ -48,12 +47,13 @@ export default class Home {
                     <button class="tab active" data-maintab="all">All Data</button>
                     <button class="tab" data-maintab="sales">Sales Receipts (Orders)</button>
                     <button class="tab" data-maintab="refunds">Refund Receipts</button>
-                    <button class="tab" data-maintab="expenses">Expenses (< 0)</button>
-                    <button class="tab" data-maintab="deposits">Deposits (> 0)</button>
+                    <button class="tab" data-maintab="expenses">Expenses</button>
+                    <button class="tab" data-maintab="deposits">Deposits</button>
                     <button class="tab" data-maintab="payouts">Payouts (Transfers)</button>
+                    <button class="tab" data-maintab="unmapped" style="color: var(--danger);">Unmapped Items</button>
                 </div>
 
-                <div class="tabs sub-tabs" style="background: #f8f9fa; padding-top: 5px; margin-bottom: 1rem;">
+                <div class="tabs sub-tabs" style="background: #f8f9fa; padding-top: 5px; margin-bottom: 1rem;" id="subTabContainer">
                     <button class="tab active" data-subtab="table" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Data Table View</button>
                     <button class="tab" data-subtab="journal" style="font-size: 0.9rem; padding: 0.5rem 1rem;">Summary Journal View</button>
                 </div>
@@ -91,6 +91,13 @@ export default class Home {
                 document.querySelectorAll('.main-tabs .tab').forEach(t => t.classList.remove('active'));
                 e.target.classList.add('active');
                 this.activeMainTab = e.target.dataset.maintab;
+                
+                if (this.activeMainTab === 'unmapped') {
+                    document.getElementById('subTabContainer').style.display = 'none';
+                } else {
+                    document.getElementById('subTabContainer').style.display = 'flex';
+                }
+                
                 this.renderActiveView();
             });
         });
@@ -107,6 +114,12 @@ export default class Home {
 
     renderActiveView() {
         if (this.transactions.length === 0) return;
+        
+        if (this.activeMainTab === 'unmapped') {
+            this.renderUnmappedTable();
+            return;
+        }
+
         if (this.activeSubTab === 'table') {
             this.renderTable();
         } else {
@@ -130,23 +143,23 @@ export default class Home {
         }
 
         if (this.activeMainTab === 'sales') {
-            data = data.filter(t => (t['type'] || "").toLowerCase() === 'order');
+            data = data.filter(t => t.type.toLowerCase() === 'order' && t.groupClass === 'receipt');
         } else if (this.activeMainTab === 'refunds') {
-            data = data.filter(t => (t['type'] || "").toLowerCase() === 'refund');
-        } else if (this.activeMainTab === 'payouts') {
-            data = data.filter(t => (t['type'] || "").toLowerCase() === 'transfer');
+            data = data.filter(t => t.type.toLowerCase() === 'refund' && t.groupClass === 'receipt');
         } else if (this.activeMainTab === 'expenses') {
             data = data.filter(t => {
-                const type = (t['type'] || "").toLowerCase();
-                const amt = parseFloat(t.total || 0);
-                return type !== 'order' && type !== 'refund' && type !== 'transfer' && amt < 0;
+                const isOrderFee = (t.type.toLowerCase() === 'order' && t.groupClass === 'fee');
+                const isGeneralExpense = (t.type.toLowerCase() !== 'order' && t.type.toLowerCase() !== 'refund' && t.type.toLowerCase() !== 'transfer' && parseFloat(t.total) < 0);
+                return isOrderFee || isGeneralExpense;
             });
         } else if (this.activeMainTab === 'deposits') {
             data = data.filter(t => {
-                const type = (t['type'] || "").toLowerCase();
-                const amt = parseFloat(t.total || 0);
-                return type !== 'order' && type !== 'refund' && type !== 'transfer' && amt >= 0;
+                const isRefundFee = (t.type.toLowerCase() === 'refund' && t.groupClass === 'fee');
+                const isGeneralDeposit = (t.type.toLowerCase() !== 'order' && t.type.toLowerCase() !== 'refund' && t.type.toLowerCase() !== 'transfer' && parseFloat(t.total) >= 0);
+                return isRefundFee || isGeneralDeposit;
             });
+        } else if (this.activeMainTab === 'payouts') {
+            data = data.filter(t => t.type.toLowerCase() === 'transfer');
         }
 
         return data;
@@ -179,7 +192,6 @@ export default class Home {
                 endDate: this.endDate
             };
 
-            // Route to specific modular handlers based on the active view
             if (this.activeSubTab === 'table') {
                 if (this.activeMainTab === 'sales') {
                     await pushSalesReceipts(visibleData, config, this);
@@ -192,10 +204,9 @@ export default class Home {
                 } else if (this.activeMainTab === 'payouts') {
                     await pushPayouts(visibleData, config, this);
                 } else {
-                    throw new Error("Detailed sync is only available within specific tabs (Sales, Refunds, Expenses, Deposits, Payouts).");
+                    throw new Error("Detailed sync is only available within specific tabs.");
                 }
             } else {
-                // If Journal View, push a standard Journal Entry
                 await this.pushStandardJournalEntry(visibleData, config);
             }
 
@@ -213,7 +224,7 @@ export default class Home {
         const pushJournalEntry = httpsCallable(config.functions, 'pushJournalEntry');
 
         let depId;
-        const depResponse = await getOrCreateQboAccount({ accountName: config.depositAccountName, realmId: config.realmId });
+        const depResponse = await getOrCreateQboAccount({ accountName: config.depositAccountName, realmId: config.realmId, accountType: "Bank" });
         depId = depResponse.data.id;
 
         if (this.activeMainTab === 'payouts') {
@@ -293,7 +304,13 @@ export default class Home {
 
     async loadCategories() {
         const snap = await getDocs(collection(db, "category"));
-        snap.forEach(doc => { this.categoriesDict[doc.id] = doc.data().category; });
+        snap.forEach(doc => { 
+            this.categoriesDict[doc.id] = {
+                category: doc.data().category,
+                accountType: doc.data().accountType || "",
+                description: doc.data().description || ""
+            }; 
+        });
     }
 
     showAlert(message, type = "warning") {
@@ -361,9 +378,13 @@ export default class Home {
         }
 
         const expandedTransactions = [];
-        const targetColumns = [
+        
+        const receiptColumns = [
             'product sales', 'product sales tax', 'shipping credits', 'shipping credits tax',
-            'gift wrap credits', 'giftwrap credits tax', 'Regulatory Fee', 'Tax On Regulatory Fee',
+            'gift wrap credits', 'giftwrap credits tax', 'Regulatory Fee', 'Tax On Regulatory Fee'
+        ];
+        
+        const feeColumns = [
             'promotional rebates', 'promotional rebates tax', 'marketplace withheld tax',
             'selling fees', 'fba fees'
         ];
@@ -373,21 +394,46 @@ export default class Home {
             const tLower = typeStr.toLowerCase();
 
             if (tLower === 'order' || tLower === 'refund') {
-                targetColumns.forEach(colName => {
+                const prefix = typeStr; // Capitalized exactly as Amazon has it
+
+                receiptColumns.forEach(colName => {
                     const amt = parseFloat(row[colName] || 0);
                     if (amt !== 0) {
+                        const lineItemName = `${prefix} ${colName}`;
                         expandedTransactions.push({
                             ...row,
+                            type: typeStr,
                             total: amt,
                             quantity: row['quantity'] || 1,
                             description: row['description'] || "",
-                            lineItem: colName,
-                            category: this.categoriesDict[colName] || "",
+                            lineItem: lineItemName,
+                            category: (this.categoriesDict[lineItemName] || {}).category || "",
                             uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
-                            selected: false
+                            selected: false,
+                            groupClass: 'receipt'
                         });
                     }
                 });
+
+                feeColumns.forEach(colName => {
+                    const amt = parseFloat(row[colName] || 0);
+                    if (amt !== 0) {
+                        const lineItemName = `${prefix} ${colName}`;
+                        expandedTransactions.push({
+                            ...row,
+                            type: typeStr,
+                            total: amt,
+                            quantity: row['quantity'] || 1,
+                            description: row['description'] || "",
+                            lineItem: lineItemName,
+                            category: (this.categoriesDict[lineItemName] || {}).category || "",
+                            uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
+                            selected: false,
+                            groupClass: 'fee'
+                        });
+                    }
+                });
+
             } else {
                 let lineItem = `${typeStr} - ${row['description'] || ""}`.replace(/^ - | - $/g, '').trim();
                 if (tLower === 'transfer') {
@@ -399,13 +445,15 @@ export default class Home {
                 if (amt !== 0 || typeStr !== "") {
                     expandedTransactions.push({
                         ...row,
+                        type: typeStr,
                         total: amt,
                         quantity: 1,
                         description: row['description'] || "",
                         lineItem: lineItem,
-                        category: this.categoriesDict[lineItem] || "",
+                        category: (this.categoriesDict[lineItem] || {}).category || "",
                         uid: Date.now().toString(36) + Math.random().toString(36).substring(2),
-                        selected: false
+                        selected: false,
+                        groupClass: 'general'
                     });
                 }
             }
@@ -440,8 +488,11 @@ export default class Home {
     async updateCategory(lineItem, newCategory) {
         if(!newCategory || newCategory.trim() === "") return;
         try {
-            await setDoc(doc(db, "category", lineItem), { lineItem: lineItem, category: newCategory });
-            this.categoriesDict[lineItem] = newCategory;
+            await setDoc(doc(db, "category", lineItem), { lineItem: lineItem, category: newCategory }, { merge: true });
+            
+            if (!this.categoriesDict[lineItem]) this.categoriesDict[lineItem] = {};
+            this.categoriesDict[lineItem].category = newCategory;
+            
             this.transactions.forEach(t => { if(t.lineItem === lineItem) t.category = newCategory; });
             this.renderActiveView(); 
         } catch (e) { alert("Error updating category database."); }
@@ -523,6 +574,117 @@ export default class Home {
         };
     }
 
+    renderUnmappedTable() {
+        const unmappedData = [];
+        const seen = new Set();
+        
+        this.transactions.forEach(t => {
+            if (!t.category && !seen.has(t.lineItem)) {
+                seen.add(t.lineItem);
+                unmappedData.push(t);
+            }
+        });
+
+        let html = `
+            <div style="margin-bottom: 10px;">
+                <span style="font-size:0.9rem; color:#666;">Showing ${unmappedData.length} unique unmapped line items.</span>
+            </div>
+            <div class="table-responsive">
+            <table><thead><tr>
+                <th>Line Item</th>
+                <th>Category Name (QBO Account)</th>
+                <th>Account Type</th>
+                <th>Description</th>
+                <th style="text-align:center;">Action</th>
+            </tr></thead><tbody>
+        `;
+
+        if (unmappedData.length === 0) {
+            html += `<tr><td colspan="5" style="text-align:center; padding: 2rem; color: #27ae60; font-weight: bold;">All line items are successfully mapped!</td></tr>`;
+        }
+
+        unmappedData.forEach((t, i) => {
+            html += `<tr>
+                <td><strong>${t.lineItem}</strong></td>
+                <td><input type="text" id="unmap-cat-${i}" placeholder="E.g., Product Sales, FBA Fees..." style="padding:0.4rem; width:100%; box-sizing: border-box;"></td>
+                <td>
+                    <select id="unmap-type-${i}" style="padding:0.4rem; width:100%; box-sizing: border-box;">
+                        <option value="Income">Income</option>
+                        <option value="Expense" selected>Expense</option>
+                        <option value="Bank">Bank / Clearing</option>
+                        <option value="OtherCurrentAsset">Other Current Asset</option>
+                        <option value="CostOfGoodsSold">Cost of Goods Sold</option>
+                    </select>
+                </td>
+                <td><input type="text" id="unmap-desc-${i}" placeholder="Optional internal description" style="padding:0.4rem; width:100%; box-sizing: border-box;"></td>
+                <td style="text-align:center;">
+                    <button class="btn" onclick="window.pushAndSaveUnmapped('${t.lineItem}', ${i})">Push to QBO & Save</button>
+                </td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+        document.getElementById('tabContent').innerHTML = html;
+
+        window.pushAndSaveUnmapped = async (lineItem, index) => {
+            const catVal = document.getElementById(`unmap-cat-${index}`).value.trim();
+            const typeVal = document.getElementById(`unmap-type-${index}`).value;
+            const descVal = document.getElementById(`unmap-desc-${index}`).value.trim();
+            const btn = event.target;
+
+            if (!catVal) { 
+                this.showAlert("Please enter a Category Name (QBO Account Name).", "danger"); 
+                return; 
+            }
+            
+            const qboSelect = document.getElementById('qboSelect');
+            if (!qboSelect || !qboSelect.value) {
+                this.showAlert("Please connect and select a QBO account from the top menu first.", "warning");
+                return;
+            }
+
+            btn.innerText = "Pushing...";
+            btn.disabled = true;
+
+            try {
+                const getOrCreateQboAccount = httpsCallable(functions, 'getOrCreateQboAccount');
+                
+                // 1. Force the creation of the specific account type directly to Intuit
+                await getOrCreateQboAccount({
+                    accountName: catVal,
+                    realmId: qboSelect.value,
+                    accountType: typeVal,
+                    description: descVal
+                });
+
+                // 2. Permanently save the detailed mapping to Firebase
+                await setDoc(doc(db, "category", lineItem), {
+                    lineItem: lineItem,
+                    category: catVal,
+                    accountType: typeVal,
+                    description: descVal
+                }, { merge: true });
+
+                // 3. Update the active memory
+                if (!this.categoriesDict[lineItem]) this.categoriesDict[lineItem] = {};
+                this.categoriesDict[lineItem].category = catVal;
+                this.categoriesDict[lineItem].accountType = typeVal;
+                
+                this.transactions.forEach(t => {
+                    if (t.lineItem === lineItem) t.category = catVal;
+                });
+
+                this.showAlert(`Successfully created "${catVal}" as ${typeVal} in QBO and mapped it!`, "success");
+                this.renderActiveView(); 
+
+            } catch (err) {
+                this.showAlert(err.message, "danger");
+                btn.innerText = "Push to QBO & Save";
+                btn.disabled = false;
+            }
+        };
+    }
+
     renderJournal() {
         const currentData = this.getFilteredAndPartitionedData();
 
@@ -544,7 +706,6 @@ export default class Home {
         const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit";
         let html = `<div class="table-responsive">`;
 
-        // === PAYOUTS TAB (Individual Entries) ===
         if (this.activeMainTab === 'payouts') {
             html += `
                 <table><thead><tr>
@@ -577,7 +738,6 @@ export default class Home {
             html += `</tbody></table></div>`;
             document.getElementById('tabContent').innerHTML = html;
 
-        // === SUMMARY TABS ===
         } else {
             let summary = {};
             let netDeposit = 0;
