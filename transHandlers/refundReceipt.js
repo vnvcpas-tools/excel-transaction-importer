@@ -16,10 +16,10 @@ export async function pushRefundReceipts(data, config, context) {
         const txnDate = refundData.date ? new Date(refundData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
         const qboLines = refundData.lines.map((line, index) => {
-            const amt = parseFloat(line.total || 0);
+            // FIX: Refund Receipt expects positive numbers to represent money refunded
+            const amt = parseFloat(line.total || 0) * -1;
             const qty = parseFloat(line.quantity || 1);
 
-            // Build the concatenated Item Name for QBO Lookup
             const skuVal = (line.sku || "").trim();
             const combinedItemName = skuVal ? `${skuVal} - ${line.lineItem}` : line.lineItem;
 
@@ -35,7 +35,6 @@ export async function pushRefundReceipts(data, config, context) {
                         "value": line.category, 
                         "name": combinedItemName.substring(0, 100) 
                     },
-                    // Pass temporary variables to the backend for Item creation
                     "_ItemSku": skuVal,
                     "_ItemDesc": line.description || line.lineItem
                 }
