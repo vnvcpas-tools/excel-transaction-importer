@@ -16,14 +16,28 @@ export async function pushRefundReceipts(data, config, context) {
         const txnDate = refundData.date ? new Date(refundData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
         const qboLines = refundData.lines.map((line, index) => {
+            const amt = parseFloat(line.total || 0);
+            const qty = parseFloat(line.quantity || 1);
+
+            // Build the concatenated Item Name for QBO Lookup
+            const skuVal = (line.sku || "").trim();
+            const combinedItemName = skuVal ? `${skuVal} - ${line.lineItem}` : line.lineItem;
+
             return {
                 "Id": (index + 1).toString(),
                 "Description": line.description || line.lineItem,
-                "Amount": Math.abs(parseFloat(line.total)),
+                "Amount": amt,
                 "DetailType": "SalesItemLineDetail",
                 "SalesItemLineDetail": {
-                    "Qty": parseFloat(line.quantity || 1),
-                    "ItemRef": { "value": line.category, "name": line.sku || "Custom-Refund-Item" }
+                    "Qty": qty,
+                    "UnitPrice": amt / qty,
+                    "ItemRef": { 
+                        "value": line.category, 
+                        "name": combinedItemName.substring(0, 100) 
+                    },
+                    // Pass temporary variables to the backend for Item creation
+                    "_ItemSku": skuVal,
+                    "_ItemDesc": line.description || line.lineItem
                 }
             };
         });
