@@ -39,7 +39,8 @@ export default class Home {
                     </div>
 
                     <input type="text" id="depositAccount" value="Payments to Deposit" placeholder="Offset Account" style="width: 200px;">
-                    <button id="syncQboBtn" class="btn" disabled>Push Current View to QBO</button>
+                    <button id="syncQboBtn" class="btn" disabled>Push Current View</button>
+                    <button id="viewHistoryBtn" class="btn outline" style="background: white;">View Batch History</button>
                 </div>
                 <div style="text-align: right; margin-bottom: 1rem;"><span style="font-size: 0.9rem; color: #666;" id="limitText"></span></div>
 
@@ -60,6 +61,17 @@ export default class Home {
 
                 <div id="tabContent">
                     <p style="padding: 2rem; text-align: center; color: #7f8c8d;">Upload an Amazon Date Range Report to begin.</p>
+                </div>
+            </div>
+
+            <div id="historyModal" class="modal-overlay">
+                <div class="modal-content" style="max-width: 900px;">
+                    <h2 style="margin-top:0;">QBO Push History (Batches)</h2>
+                    <p style="color: #666;">View and reverse recent transaction batches pushed to QuickBooks.</p>
+                    <div id="historyTableContainer" style="margin: 1rem 0; max-height: 400px; overflow-y: auto;"></div>
+                    <div style="text-align: right; margin-top: 1rem;">
+                        <button class="btn outline" onclick="document.getElementById('historyModal').style.display='none'" style="color: black; border-color: #ccc;">Close</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -85,6 +97,13 @@ export default class Home {
         });
 
         document.getElementById('syncQboBtn').addEventListener('click', () => this.handlePushToQbo());
+        
+        // Hook up the new History Button
+        document.getElementById('viewHistoryBtn').addEventListener('click', () => {
+            if (!currentUser) return this.showAlert("You must be logged in to view history.", "warning");
+            document.getElementById('historyModal').style.display = 'flex';
+            this.loadBatchHistory();
+        });
 
         document.querySelectorAll('.main-tabs .tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
@@ -110,21 +129,16 @@ export default class Home {
                 this.renderActiveView();
             });
         });
+
+        // Global function for the delete button inside the modal
+        window.deleteBatch = (batchId, realmId) => this.handleDeleteBatch(batchId, realmId);
     }
 
     renderActiveView() {
         if (this.transactions.length === 0) return;
-        
-        if (this.activeMainTab === 'unmapped') {
-            this.renderUnmappedTable();
-            return;
-        }
-
-        if (this.activeSubTab === 'table') {
-            this.renderTable();
-        } else {
-            this.renderJournal();
-        }
+        if (this.activeMainTab === 'unmapped') return this.renderUnmappedTable();
+        if (this.activeSubTab === 'table') return this.renderTable();
+        this.renderJournal();
     }
 
     getFilteredAndPartitionedData() {
@@ -167,17 +181,10 @@ export default class Home {
 
     async handlePushToQbo() {
         const qboSelect = document.getElementById('qboSelect');
-        if (!qboSelect || !qboSelect.value) {
-            this.showAlert("Please connect and select a QBO account first.", "warning");
-            return;
-        }
+        if (!qboSelect || !qboSelect.value) return this.showAlert("Please connect and select a QBO account first.", "warning");
 
         const visibleData = this.getFilteredAndPartitionedData();
-
-        if (visibleData.length === 0) {
-            this.showAlert("No transactions in the current view to push.", "warning");
-            return;
-        }
+        if (visibleData.length === 0) return this.showAlert("No transactions in the current view to push.", "warning");
 
         const pushBtn = document.getElementById('syncQboBtn');
         const originalText = pushBtn.innerText;
@@ -190,25 +197,31 @@ export default class Home {
                 depositAccountName: this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit",
                 functions: functions,
                 endDate: this.endDate,
-                batchId: `batch_${Date.now()}` // FIX: Generates a unique batch ID for the ledger
+                batchId: `batch_${Date.now()}` 
             };
 
+            let pushedIds = [];
+
             if (this.activeSubTab === 'table') {
-                if (this.activeMainTab === 'sales') {
-                    await pushSalesReceipts(visibleData, config, this);
-                } else if (this.activeMainTab === 'refunds') {
-                    await pushRefundReceipts(visibleData, config, this);
-                } else if (this.activeMainTab === 'deposits') {
-                    await pushDeposits(visibleData, config, this);
-                } else if (this.activeMainTab === 'expenses') {
-                    await pushExpenses(visibleData, config, this);
-                } else if (this.activeMainTab === 'payouts') {
-                    await pushPayouts(visibleData, config, this);
-                } else {
-                    throw new Error("Detailed sync is only available within specific tabs.");
-                }
+                if (this.activeMainTab === 'sales') pushedIds = await pushSalesReceipts(visibleData, config, this);
+                else if (this.activeMainTab === 'refunds') pushedIds = await pushRefundReceipts(visibleData, config, this);
+                else if (this.activeMainTab === 'deposits') pushedIds = await pushDeposits(visibleData, config, this);
+                else if (this.activeMainTab === 'expenses') pushedIds = await pushExpenses(visibleData, config, this);
+                else if (this.activeMainTab === 'payouts') pushedIds = await pushPayouts(visibleData, config, this);
+                else throw new Error("Detailed sync is only available within specific tabs.");
             } else {
-                await this.pushStandardJournalEntry(visibleData, config);
+                pushedIds = await this.pushStandardJournalEntry(visibleData, config);
+            }
+
+            // Save Master Batch Record so it appears in the History UI
+            if (pushedIds && pushedIds.length > 0) {
+                await setDoc(doc(db, "users", currentUser.uid, "transPushedToQB", config.batchId), {
+                    timestamp: new Date().toISOString(),
+                    realmId: config.realmId,
+                    tab: this.activeMainTab,
+                    view: this.activeSubTab,
+                    qboIds: pushedIds
+                });
             }
 
         } catch (error) {
@@ -227,6 +240,8 @@ export default class Home {
         let depId;
         const depResponse = await getOrCreateQboAccount({ accountName: config.depositAccountName, realmId: config.realmId, accountType: "Bank" });
         depId = depResponse.data.id;
+
+        let pushedIds = [];
 
         if (this.activeMainTab === 'payouts') {
             for (const t of visibleData) {
@@ -247,7 +262,8 @@ export default class Home {
                 }
 
                 const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
-                await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
+                const res = await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
+                pushedIds.push({ type: "JournalEntry", id: res.data.qboResponseId });
             }
             this.showAlert(`Success! ${visibleData.length} Individual Payout Entries created in QBO.`, "success");
         } else {
@@ -275,33 +291,104 @@ export default class Home {
 
             for (const lineKey of Object.keys(summary)) {
                 const amt = summary[lineKey].amt;
-                const catName = summary[lineKey].catName;
                 if (amt === 0) continue;
 
-                const catResponse = await getOrCreateQboAccount({ accountName: catName, realmId: config.realmId });
-                const qboId = catResponse.data.id;
-
-                if (amt < 0) {
-                    linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: qboId, description: lineKey });
-                } else if (amt > 0) {
-                    linesToPush.push({ postingType: "Credit", amount: amt, qboAccountId: qboId, description: lineKey });
-                }
+                const catResponse = await getOrCreateQboAccount({ accountName: summary[lineKey].catName, realmId: config.realmId });
+                if (amt < 0) linesToPush.push({ postingType: "Debit", amount: Math.abs(amt), qboAccountId: catResponse.data.id, description: lineKey });
+                else linesToPush.push({ postingType: "Credit", amount: amt, qboAccountId: catResponse.data.id, description: lineKey });
             }
 
             let summaryDateStr = config.endDate;
             if (!summaryDateStr) {
                 const dates = visibleData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
-                if (dates.length > 0) {
-                    summaryDateStr = new Date(Math.max(...dates)).toISOString().split('T')[0];
-                }
+                if (dates.length > 0) summaryDateStr = new Date(Math.max(...dates)).toISOString().split('T')[0];
             }
 
             const response = await pushJournalEntry({ realmId: config.realmId, lines: linesToPush, txnDate: summaryDateStr, privateNote: `Imported via VilBooks - Tab: ${this.activeMainTab.toUpperCase()}` });
             if (response.data.success) {
                 this.showAlert(`Success! ${this.activeMainTab.toUpperCase()} Summary Journal Entry created in QBO.`, "success");
+                pushedIds.push({ type: "JournalEntry", id: response.data.qboResponseId });
             }
         }
+        return pushedIds;
     }
+
+    // --- NEW: History Modal Logic ---
+    async loadBatchHistory() {
+        const container = document.getElementById('historyTableContainer');
+        container.innerHTML = "<p>Loading history...</p>";
+
+        try {
+            const snap = await getDocs(collection(db, "users", currentUser.uid, "transPushedToQB"));
+            let batches = [];
+            snap.forEach(doc => batches.push({ id: doc.id, ...doc.data() }));
+            batches.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+            if (batches.length === 0) {
+                container.innerHTML = "<p>No batches pushed yet.</p>";
+                return;
+            }
+
+            let html = `
+                <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+                    <thead style="background: #f8f9fa;">
+                        <tr>
+                            <th style="padding: 10px; border-bottom: 2px solid #ddd;">Date Pushed</th>
+                            <th style="padding: 10px; border-bottom: 2px solid #ddd;">Tab / View</th>
+                            <th style="padding: 10px; border-bottom: 2px solid #ddd;">Items Created</th>
+                            <th style="padding: 10px; border-bottom: 2px solid #ddd; text-align: center;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            batches.forEach(b => {
+                const dateStr = new Date(b.timestamp).toLocaleString();
+                const itemCount = b.qboIds ? b.qboIds.length : 0;
+                
+                html += `
+                    <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">
+                            <strong>${dateStr}</strong><br>
+                            <span style="font-size:0.75rem; color:#888;">${b.id}</span>
+                        </td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; text-transform: capitalize;">
+                            ${b.tab} <span style="color:#aaa;">(${b.view})</span>
+                        </td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee;">${itemCount}</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: center;">
+                            <button onclick="window.deleteBatch('${b.id}', '${b.realmId}')" class="btn danger" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">Reverse / Delete</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+
+        } catch (error) {
+            console.error("Failed to load history", error);
+            container.innerHTML = `<p class="text-danger">Error loading batch history.</p>`;
+        }
+    }
+
+    async handleDeleteBatch(batchId, realmId) {
+        if (!confirm("Are you sure you want to delete this entire batch from QuickBooks? This cannot be undone.")) return;
+        
+        try {
+            const deleteQboBatch = httpsCallable(functions, 'deleteQboBatch');
+            document.getElementById('historyTableContainer').innerHTML = "<p>Deleting batch from QuickBooks... Please wait.</p>";
+            
+            const res = await deleteQboBatch({ batchId: batchId, realmId: realmId });
+            
+            alert(`Success: ${res.data.deletedCount} transactions were removed from QuickBooks.`);
+            this.loadBatchHistory(); // Reload table
+        } catch (err) {
+            alert(`Failed to delete batch: ${err.message}`);
+            this.loadBatchHistory(); 
+        }
+    }
+    // --------------------------------
 
     async loadCategories() {
         const snap = await getDocs(collection(db, "category"));
@@ -355,7 +442,6 @@ export default class Home {
         html += `</tbody></table></div>`;
         container.innerHTML = html;
         
-        // Export logic
         downloadBtn.onclick = () => {
             const csv = Papa.unparse(rejectedData);
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
