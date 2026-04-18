@@ -24,13 +24,25 @@ export default class Home {
 
     async render() {
         return `
-            <div class="container" style="padding-top: 1rem;">
-                <h2 style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.5rem;">Transaction Importer (Amazon Date Range Report)</h2>
-                <div id="alertBox" class="alert" style="margin-bottom: 0.5rem; padding: 0.5rem;"></div>
+            <style>
+                @keyframes flashWarning {
+                    0% { background-color: #fff3cd; }
+                    50% { background-color: #ffe8a1; }
+                    100% { background-color: #fff3cd; }
+                }
+            </style>
+            
+            <div class="container" style="padding-top: 0.25rem;">
+                <h2 style="margin-top: 0; margin-bottom: 0.25rem; font-size: 1.4rem;">Transaction Importer (Amazon Date Range Report)</h2>
+                <div id="alertBox" class="alert" style="margin-bottom: 0.25rem; padding: 0.4rem;"></div>
 
-                <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.5rem 1rem; margin-bottom: 0.5rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.4rem 1rem; margin-bottom: 0.25rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
                     <span id="pushStatusText" style="font-weight: 500; color: #2c3e50;">Status: Ready to import</span>
                     <span id="limitText" style="color: #666;"></span>
+                </div>
+
+                <div id="highVolumeBanner" style="display: none; animation: flashWarning 1.5s infinite; color: #856404; border: 1px solid #ffeeba; padding: 0.4rem; margin-bottom: 0.5rem; border-radius: 4px; text-align: center; font-size: 0.85rem; font-weight: bold;">
+                    ⚠️ For a better experience, please reduce the number of transactions to push per batch to 500 or less by applying a date filter!
                 </div>
 
                 <div class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem; padding: 0.75rem;">
@@ -139,17 +151,23 @@ export default class Home {
     renderActiveView() {
         if (this.transactions.length === 0) return;
 
-        // DYNAMIC STATUS BAR UPDATE
         const statusText = document.getElementById('pushStatusText');
+        const highVolumeBanner = document.getElementById('highVolumeBanner');
+
         if (statusText) {
             if (this.activeMainTab === 'unmapped') {
                 const unmappedCount = new Set(this.transactions.filter(t => !t.category).map(t => t.lineItem)).size;
                 statusText.innerText = `Status: ${unmappedCount} unmapped items to resolve`;
                 statusText.style.color = "#e74c3c";
+                if (highVolumeBanner) highVolumeBanner.style.display = 'none';
             } else {
                 const currentData = this.getFilteredAndPartitionedData();
                 statusText.innerText = `Status: ${currentData.length} transactions ready to push`;
                 statusText.style.color = "#2c3e50";
+                
+                if (highVolumeBanner) {
+                    highVolumeBanner.style.display = currentData.length > 500 ? 'block' : 'none';
+                }
             }
         }
 
@@ -619,6 +637,7 @@ export default class Home {
 
         this.transactions = expandedTransactions;
         document.getElementById('syncQboBtn').disabled = false;
+        
         this.renderActiveView();
     }
 
