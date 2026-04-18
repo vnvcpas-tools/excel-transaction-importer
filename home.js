@@ -24,11 +24,16 @@ export default class Home {
 
     async render() {
         return `
-            <div class="container">
-                <h2>Transaction Importer (Amazon Date Range Report)</h2>
-                <div id="alertBox" class="alert"></div>
+            <div class="container" style="padding-top: 1rem;">
+                <h2 style="margin-top: 0; margin-bottom: 0.5rem; font-size: 1.5rem;">Transaction Importer (Amazon Date Range Report)</h2>
+                <div id="alertBox" class="alert" style="margin-bottom: 0.5rem; padding: 0.5rem;"></div>
 
-                <div class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem;">
+                <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.5rem 1rem; margin-bottom: 0.5rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50;">Status: Ready to import</span>
+                    <span id="limitText" style="color: #666;"></span>
+                </div>
+
+                <div class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem; padding: 0.75rem;">
                     <input type="file" id="csvFile" accept=".csv, .tsv" style="flex: 1; min-width: 200px;">
                     
                     <div style="display: flex; gap: 5px; align-items: center;">
@@ -42,7 +47,6 @@ export default class Home {
                     <button id="syncQboBtn" class="btn" disabled>Push Current View</button>
                     <button id="viewHistoryBtn" class="btn outline" style="background: white; color: #2c3e50; border: 1px solid #2c3e50;">View Batch History</button>
                 </div>
-                <div style="text-align: right; margin-bottom: 1rem;"><span style="font-size: 0.9rem; color: #666;" id="limitText"></span></div>
 
                 <div class="tabs main-tabs" style="border-bottom: 2px solid #3498db; margin-bottom: 0;">
                     <button class="tab active" data-maintab="all">All Data</button>
@@ -98,7 +102,6 @@ export default class Home {
 
         document.getElementById('syncQboBtn').addEventListener('click', () => this.handlePushToQbo());
         
-        // Hook up the new History Button
         document.getElementById('viewHistoryBtn').addEventListener('click', () => {
             if (!currentUser) return this.showAlert("You must be logged in to view history.", "warning");
             document.getElementById('historyModal').style.display = 'flex';
@@ -130,7 +133,6 @@ export default class Home {
             });
         });
 
-        // Global function for the delete button inside the modal
         window.deleteBatch = (batchId, realmId) => this.handleDeleteBatch(batchId, realmId);
     }
 
@@ -187,9 +189,13 @@ export default class Home {
         if (visibleData.length === 0) return this.showAlert("No transactions in the current view to push.", "warning");
 
         const pushBtn = document.getElementById('syncQboBtn');
+        const statusText = document.getElementById('pushStatusText');
         const originalText = pushBtn.innerText;
+        
         pushBtn.innerText = "Provisioning & Pushing...";
         pushBtn.disabled = true;
+        statusText.innerText = "Status: Provisioning & Pushing to QuickBooks...";
+        statusText.style.color = "#e67e22"; 
 
         try {
             const config = {
@@ -213,7 +219,6 @@ export default class Home {
                 pushedIds = await this.pushStandardJournalEntry(visibleData, config);
             }
 
-            // Save Master Batch Record so it appears in the History UI
             if (pushedIds && pushedIds.length > 0) {
                 await setDoc(doc(db, "users", currentUser.uid, "transPushedToQB", config.batchId), {
                     timestamp: new Date().toISOString(),
@@ -223,10 +228,15 @@ export default class Home {
                     qboIds: pushedIds
                 });
             }
+            
+            statusText.innerText = "Status: Push completed successfully.";
+            statusText.style.color = "#27ae60"; 
 
         } catch (error) {
             console.error("Push failed:", error);
             this.showAlert(error.message || "Failed to push to QBO. See console.", "danger");
+            statusText.innerText = "Status: Push failed. Check alerts.";
+            statusText.style.color = "#e74c3c";
         } finally {
             pushBtn.innerText = originalText;
             pushBtn.disabled = false;
@@ -313,7 +323,6 @@ export default class Home {
         return pushedIds;
     }
 
-    // --- NEW: History Modal Logic ---
     async loadBatchHistory() {
         const container = document.getElementById('historyTableContainer');
         container.innerHTML = "<p>Loading history...</p>";
@@ -382,13 +391,12 @@ export default class Home {
             const res = await deleteQboBatch({ batchId: batchId, realmId: realmId });
             
             alert(`Success: ${res.data.deletedCount} transactions were removed from QuickBooks.`);
-            this.loadBatchHistory(); // Reload table
+            this.loadBatchHistory(); 
         } catch (err) {
             alert(`Failed to delete batch: ${err.message}`);
             this.loadBatchHistory(); 
         }
     }
-    // --------------------------------
 
     async loadCategories() {
         const snap = await getDocs(collection(db, "category"));
@@ -596,6 +604,11 @@ export default class Home {
 
         this.transactions = expandedTransactions;
         document.getElementById('syncQboBtn').disabled = false;
+        
+        const statusText = document.getElementById('pushStatusText');
+        statusText.innerText = `Status: ${expandedTransactions.length} transactions ready to push`;
+        statusText.style.color = "#2c3e50";
+        
         this.renderActiveView();
     }
 
