@@ -17,6 +17,12 @@ export async function pushExpenses(data, config, context) {
     let pushedIds = [];
     let rejected = [];
 
+    const totalLines = data.length;
+    const totalTxns = Object.keys(groups).length;
+    let txnsPushed = 0;
+    let linesPushed = 0;
+    const typeName = "expense";
+
     for (const [orderId, groupData] of Object.entries(groups)) {
         const vendorName = `${groupData.marketplace || 'Amazon'} Vendor`;
         
@@ -41,6 +47,9 @@ export async function pushExpenses(data, config, context) {
         
         if (ledgerSnap.exists()) {
             groupData.lines.forEach(l => rejected.push(l));
+            txnsPushed++;
+            linesPushed += groupData.lines.length;
+            if (context && context.updatePushProgress) context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
             continue;
         }
 
@@ -60,6 +69,12 @@ export async function pushExpenses(data, config, context) {
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "Purchase", id: res.data.qboResponseId });
+
+        txnsPushed++;
+        linesPushed += groupData.lines.length;
+        if (context && context.updatePushProgress) {
+            context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
+        }
     }
 
     if (rejected.length > 0) context.showRejectionModal(rejected);
