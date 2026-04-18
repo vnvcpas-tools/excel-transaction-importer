@@ -5,7 +5,7 @@ import { currentUser } from '../app.js';
 
 export async function pushExpenses(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
-    // Group by Order ID
+    
     const groups = {};
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Expenses.");
@@ -19,9 +19,10 @@ export async function pushExpenses(data, config, context) {
 
     for (const [orderId, groupData] of Object.entries(groups)) {
         const vendorName = `${groupData.marketplace || 'Amazon'} Vendor`;
+        
         const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const exactTimeMs = groupData.date ? new Date(groupData.date).getTime() : Date.now();
 
-        // 1. Calculate Net Amount for Duplicate Check
         let netAmount = 0;
         const qboLines = groupData.lines.map(line => {
             const amt = Math.abs(parseFloat(line.total || 0));
@@ -34,8 +35,7 @@ export async function pushExpenses(data, config, context) {
             };
         });
 
-        // 2. Duplicate Check
-        const signature = `EXP_${txnDate}_${groupData.settlementId}_${netAmount.toFixed(2)}`;
+        const signature = `EXP_${exactTimeMs}_${groupData.settlementId}_${netAmount.toFixed(2)}`;
         const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
         const ledgerSnap = await getDoc(ledgerRef);
         
@@ -44,7 +44,6 @@ export async function pushExpenses(data, config, context) {
             continue;
         }
 
-        // 3. Push to QBO
         const payload = {
             "entityType": "Purchase",
             "realmId": config.realmId,
@@ -59,8 +58,6 @@ export async function pushExpenses(data, config, context) {
         };
 
         const res = await pushQboEntity(payload);
-        
-        // 4. Log to Ledger
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "Purchase", id: res.data.qboResponseId });
     }
