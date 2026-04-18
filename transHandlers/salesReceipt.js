@@ -1,25 +1,33 @@
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-functions.js";
+import { db } from '../auth.js';
+import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { currentUser } from '../app.js';
 
 export async function pushSalesReceipts(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
     
+    // Group by Order ID
     const orders = {};
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Sales.");
         const oId = t['order id'] || t.uid; 
-        if (!orders[oId]) orders[oId] = { marketplace: t.marketplace, date: t['date/time'], lines: [] };
+        if (!orders[oId]) orders[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
         orders[oId].lines.push(t);
     });
+
+    let pushedIds = [];
+    let rejected = [];
 
     for (const [orderId, orderData] of Object.entries(orders)) {
         const customerName = `${orderData.marketplace || 'Amazon'} Customer`;
         const txnDate = orderData.date ? new Date(orderData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
+        let netAmount = 0;
         const qboLines = orderData.lines.map((line, index) => {
             const amt = parseFloat(line.total || 0);
             const qty = parseFloat(line.quantity || 1);
+            netAmount += amt;
             
-            // Build the concatenated Item Name for QBO Lookup
             const skuVal = (line.sku || "").trim();
             const combinedItemName = skuVal ? `${skuVal} - ${line.lineItem}` : line.lineItem;
 
@@ -33,15 +41,25 @@ export async function pushSalesReceipts(data, config, context) {
                     "UnitPrice": amt / qty, 
                     "ItemRef": {
                         "value": line.category, 
-                        "name": combinedItemName.substring(0, 100) // QBO Name limit
+                        "name": combinedItemName.substring(0, 100) 
                     },
-                    // Pass temporary variables to the backend for Item creation
                     "_ItemSku": skuVal,
                     "_ItemDesc": line.description || line.lineItem
                 }
             };
         });
 
+        // 1. Duplicate Check
+        const signature = `SALES_${txnDate}_${orderData.settlementId}_${netAmount.toFixed(2)}`;
+        const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
+        const ledgerSnap = await getDoc(ledgerRef);
+        
+        if (ledgerSnap.exists()) {
+            orderData.lines.forEach(l => rejected.push(l));
+            continue; // Skip this order, it's a duplicate!
+        }
+
+        // 2. Build Payload
         const payload = {
             "entityType": "SalesReceipt",
             "realmId": config.realmId,
@@ -55,7 +73,13 @@ export async function pushSalesReceipts(data, config, context) {
             }
         };
 
-        await pushQboEntity(payload);
+        // 3. Push and Log
+        const res = await pushQboEntity(payload);
+        await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
+        pushedIds.push({ type: "SalesReceipt", id: res.data.qboResponseId });
     }
-    context.showAlert(`Success! Created ${Object.keys(orders).length} Sales Receipts in QBO.`, "success");
+    
+    // Trigger the UI popup if any duplicates were caught
+    if (rejected.length > 0) context.showRejectionModal(rejected);
+    return pushedIds;
 }
