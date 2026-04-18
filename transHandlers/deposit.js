@@ -19,6 +19,7 @@ export async function pushDeposits(data, config, context) {
 
     for (const [orderId, groupData] of Object.entries(groups)) {
         const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const exactTimeMs = groupData.date ? new Date(groupData.date).getTime() : Date.now();
 
         let netAmount = 0;
         const qboLines = groupData.lines.map(line => {
@@ -32,7 +33,7 @@ export async function pushDeposits(data, config, context) {
             };
         });
 
-        const signature = `DEP_${txnDate}_${groupData.settlementId}_${netAmount.toFixed(2)}`;
+        const signature = `DEP_${exactTimeMs}_${groupData.settlementId}_${netAmount.toFixed(2)}`;
         const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
         const ledgerSnap = await getDoc(ledgerRef);
         
@@ -53,7 +54,6 @@ export async function pushDeposits(data, config, context) {
         };
 
         const res = await pushQboEntity(payload);
-        
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "Deposit", id: res.data.qboResponseId });
     }
