@@ -138,6 +138,21 @@ export default class Home {
 
     renderActiveView() {
         if (this.transactions.length === 0) return;
+
+        // DYNAMIC STATUS BAR UPDATE
+        const statusText = document.getElementById('pushStatusText');
+        if (statusText) {
+            if (this.activeMainTab === 'unmapped') {
+                const unmappedCount = new Set(this.transactions.filter(t => !t.category).map(t => t.lineItem)).size;
+                statusText.innerText = `Status: ${unmappedCount} unmapped items to resolve`;
+                statusText.style.color = "#e74c3c";
+            } else {
+                const currentData = this.getFilteredAndPartitionedData();
+                statusText.innerText = `Status: ${currentData.length} transactions ready to push`;
+                statusText.style.color = "#2c3e50";
+            }
+        }
+
         if (this.activeMainTab === 'unmapped') return this.renderUnmappedTable();
         if (this.activeSubTab === 'table') return this.renderTable();
         this.renderJournal();
@@ -604,11 +619,6 @@ export default class Home {
 
         this.transactions = expandedTransactions;
         document.getElementById('syncQboBtn').disabled = false;
-        
-        const statusText = document.getElementById('pushStatusText');
-        statusText.innerText = `Status: ${expandedTransactions.length} transactions ready to push`;
-        statusText.style.color = "#2c3e50";
-        
         this.renderActiveView();
     }
 
