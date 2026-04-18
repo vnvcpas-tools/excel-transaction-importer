@@ -1,17 +1,51 @@
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-functions.js";
+import { db } from '../auth.js';
+import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { currentUser } from '../app.js';
 
 export async function pushExpenses(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
-
-    for (const t of data) {
+    
+    // Group by Order ID
+    const groups = {};
+    data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Expenses.");
+        const oId = t['order id'] || t.uid; 
+        if (!groups[oId]) groups[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
+        groups[oId].lines.push(t);
+    });
+
+    let pushedIds = [];
+    let rejected = [];
+
+    for (const [orderId, groupData] of Object.entries(groups)) {
+        const vendorName = `${groupData.marketplace || 'Amazon'} Vendor`;
+        const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+
+        // 1. Calculate Net Amount for Duplicate Check
+        let netAmount = 0;
+        const qboLines = groupData.lines.map(line => {
+            const amt = Math.abs(parseFloat(line.total || 0));
+            netAmount += amt;
+            return {
+                "Amount": amt,
+                "DetailType": "AccountBasedExpenseLineDetail",
+                "AccountBasedExpenseLineDetail": { "AccountRef": { "name": line.category } },
+                "Description": line.lineItem
+            };
+        });
+
+        // 2. Duplicate Check
+        const signature = `EXP_${txnDate}_${groupData.settlementId}_${netAmount.toFixed(2)}`;
+        const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
+        const ledgerSnap = await getDoc(ledgerRef);
         
-        const vendorName = `${t.marketplace || 'Amazon'} Vendor`;
-        const txnDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        if (ledgerSnap.exists()) {
+            groupData.lines.forEach(l => rejected.push(l));
+            continue;
+        }
 
-        // FIX: Purchase logic expects positive numbers representing the expense paid
-        const amt = parseFloat(t.total || 0) * -1;
-
+        // 3. Push to QBO
         const payload = {
             "entityType": "Purchase",
             "realmId": config.realmId,
@@ -20,21 +54,18 @@ export async function pushExpenses(data, config, context) {
                 "PaymentType": "Cash",
                 "AccountRef": { "name": config.depositAccountName },
                 "EntityRef": { "name": vendorName },
-                "PrivateNote": t.lineItem,
-                "Line": [
-                    {
-                        "Amount": amt,
-                        "DetailType": "AccountBasedExpenseLineDetail",
-                        "AccountBasedExpenseLineDetail": {
-                            "AccountRef": { "name": t.category }
-                        },
-                        "Description": t.lineItem
-                    }
-                ]
+                "PrivateNote": `Order ID: ${orderId}`,
+                "Line": qboLines
             }
         };
 
-        await pushQboEntity(payload);
+        const res = await pushQboEntity(payload);
+        
+        // 4. Log to Ledger
+        await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
+        pushedIds.push({ type: "Purchase", id: res.data.qboResponseId });
     }
-    context.showAlert(`Success! Created ${data.length} Expenses in QBO.`, "success");
+
+    if (rejected.length > 0) context.showRejectionModal(rejected);
+    return pushedIds;
 }
