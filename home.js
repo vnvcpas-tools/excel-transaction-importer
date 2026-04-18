@@ -189,7 +189,8 @@ export default class Home {
                 realmId: qboSelect.value,
                 depositAccountName: this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit",
                 functions: functions,
-                endDate: this.endDate
+                endDate: this.endDate,
+                batchId: `batch_${Date.now()}` // FIX: Generates a unique batch ID for the ledger
             };
 
             if (this.activeSubTab === 'table') {
@@ -322,6 +323,54 @@ export default class Home {
     hideAlert() {
         document.getElementById('alertBox').className = "alert";
     }
+    
+    showRejectionModal(rejectedData) {
+        const modal = document.getElementById('rejectionModal');
+        const container = document.getElementById('rejectionTableContainer');
+        const downloadBtn = document.getElementById('downloadRejectsBtn');
+        
+        let html = `
+            <div class="table-responsive" style="max-height: 400px; border: 1px solid #ccc;">
+            <table style="width: 100%; border-collapse: collapse;">
+                <thead style="background: #f8f9fa; position: sticky; top: 0;">
+                    <tr>
+                        <th style="padding: 8px; border-bottom: 1px solid #ddd; text-align: left;">Date</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #ddd; text-align: left;">Type</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #ddd; text-align: left;">Settlement ID</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        rejectedData.forEach(t => {
+            html += `<tr>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['date/time'] || ''}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['type'] || ''}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['settlement id'] || ''}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${t.total || 0}</td>
+            </tr>`;
+        });
+        
+        html += `</tbody></table></div>`;
+        container.innerHTML = html;
+        
+        // Export logic
+        downloadBtn.onclick = () => {
+            const csv = Papa.unparse(rejectedData);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", `rejected_duplicates_${Date.now()}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        modal.style.display = 'flex';
+    }
 
     checkGuestLimits() {
         if (currentUser) return true;
@@ -394,7 +443,7 @@ export default class Home {
             const tLower = typeStr.toLowerCase();
 
             if (tLower === 'order' || tLower === 'refund') {
-                const prefix = typeStr; // Capitalized exactly as Amazon has it
+                const prefix = typeStr; 
 
                 receiptColumns.forEach(colName => {
                     const amt = parseFloat(row[colName] || 0);
@@ -649,7 +698,6 @@ export default class Home {
             try {
                 const getOrCreateQboAccount = httpsCallable(functions, 'getOrCreateQboAccount');
                 
-                // 1. Force the creation of the specific account type directly to Intuit
                 await getOrCreateQboAccount({
                     accountName: catVal,
                     realmId: qboSelect.value,
@@ -657,7 +705,6 @@ export default class Home {
                     description: descVal
                 });
 
-                // 2. Permanently save the detailed mapping to Firebase
                 await setDoc(doc(db, "category", lineItem), {
                     lineItem: lineItem,
                     category: catVal,
@@ -665,7 +712,6 @@ export default class Home {
                     description: descVal
                 }, { merge: true });
 
-                // 3. Update the active memory
                 if (!this.categoriesDict[lineItem]) this.categoriesDict[lineItem] = {};
                 this.categoriesDict[lineItem].category = catVal;
                 this.categoriesDict[lineItem].accountType = typeVal;
