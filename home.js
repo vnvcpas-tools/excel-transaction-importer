@@ -40,7 +40,7 @@ export default class Home {
 
                     <input type="text" id="depositAccount" value="Payments to Deposit" placeholder="Offset Account" style="width: 200px;">
                     <button id="syncQboBtn" class="btn" disabled>Push Current View</button>
-                    <button id="viewHistoryBtn" class="btn outline" style="background: white;">View Batch History</button>
+                    <button id="viewHistoryBtn" class="btn outline" style="background: white; color: #2c3e50; border: 1px solid #2c3e50;">View Batch History</button>
                 </div>
                 <div style="text-align: right; margin-bottom: 1rem;"><span style="font-size: 0.9rem; color: #666;" id="limitText"></span></div>
 
