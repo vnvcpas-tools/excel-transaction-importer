@@ -13,12 +13,13 @@ export async function pushPayouts(data, config, context) {
         if (!t.category) throw new Error("Missing category mapping in Payouts.");
         
         const vendorName = `${t.marketplace || 'Amazon'} Vendor`;
+        
         const txnDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const exactTimeMs = t['date/time'] ? new Date(t['date/time']).getTime() : Date.now();
         
         const amt = Math.abs(parseFloat(t.total || 0));
 
-        // 1. Duplicate Check (Payouts are single lines, not grouped by Order ID)
-        const signature = `PAYOUT_${txnDate}_${t['settlement id']}_${amt.toFixed(2)}`;
+        const signature = `PAYOUT_${exactTimeMs}_${t['settlement id']}_${amt.toFixed(2)}`;
         const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
         const ledgerSnap = await getDoc(ledgerRef);
         
@@ -27,7 +28,6 @@ export async function pushPayouts(data, config, context) {
             continue; 
         }
 
-        // 2. Build Payload
         const payload = {
             "entityType": "Purchase",
             "realmId": config.realmId,
@@ -50,7 +50,6 @@ export async function pushPayouts(data, config, context) {
             }
         };
 
-        // 3. Push and Log
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "Purchase", id: res.data.qboResponseId });
