@@ -5,6 +5,7 @@ import { currentUser } from '../app.js';
 
 export async function pushSalesReceipts(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
+    
     const orders = {};
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Sales.");
@@ -16,13 +17,16 @@ export async function pushSalesReceipts(data, config, context) {
     let pushedIds = [];
     let rejected = [];
 
+    const totalLines = data.length;
+    const totalTxns = Object.keys(orders).length;
+    let txnsPushed = 0;
+    let linesPushed = 0;
+    const typeName = "sales receipt";
+
     for (const [orderId, orderData] of Object.entries(orders)) {
         const customerName = `${orderData.marketplace || 'Amazon'} Customer`;
         
-        // QBO Payload Date (Strictly YYYY-MM-DD)
         const txnDate = orderData.date ? new Date(orderData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
-        
-        // Signature Date (Exact Millisecond Timestamp)
         const exactTimeMs = orderData.date ? new Date(orderData.date).getTime() : Date.now();
 
         let netAmount = 0;
@@ -52,13 +56,15 @@ export async function pushSalesReceipts(data, config, context) {
             };
         });
 
-        // Use exactTimeMs to prevent false duplicates
         const signature = `SALES_${exactTimeMs}_${orderData.settlementId}_${netAmount.toFixed(2)}`;
         const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
         const ledgerSnap = await getDoc(ledgerRef);
         
         if (ledgerSnap.exists()) {
             orderData.lines.forEach(l => rejected.push(l));
+            txnsPushed++;
+            linesPushed += orderData.lines.length;
+            if (context && context.updatePushProgress) context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
             continue; 
         }
 
@@ -78,6 +84,12 @@ export async function pushSalesReceipts(data, config, context) {
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "SalesReceipt", id: res.data.qboResponseId });
+
+        txnsPushed++;
+        linesPushed += orderData.lines.length;
+        if (context && context.updatePushProgress) {
+            context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
+        }
     }
     
     if (rejected.length > 0) context.showRejectionModal(rejected);
