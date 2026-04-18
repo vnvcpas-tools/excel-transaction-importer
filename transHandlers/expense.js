@@ -5,7 +5,6 @@ import { currentUser } from '../app.js';
 
 export async function pushExpenses(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
-    
     // Group by Order ID
     const groups = {};
     data.forEach(t => {
