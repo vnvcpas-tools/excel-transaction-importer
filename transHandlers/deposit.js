@@ -17,6 +17,12 @@ export async function pushDeposits(data, config, context) {
     let pushedIds = [];
     let rejected = [];
 
+    const totalLines = data.length;
+    const totalTxns = Object.keys(groups).length;
+    let txnsPushed = 0;
+    let linesPushed = 0;
+    const typeName = "deposit"; // Change this to "expense", "sales receipt", or "refund receipt" depending on the file
+    
     for (const [orderId, groupData] of Object.entries(groups)) {
         const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         const exactTimeMs = groupData.date ? new Date(groupData.date).getTime() : Date.now();
