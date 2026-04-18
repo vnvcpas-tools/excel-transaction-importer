@@ -6,7 +6,6 @@ import { currentUser } from '../app.js';
 export async function pushSalesReceipts(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
     
-    // Group by Order ID
     const orders = {};
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Sales.");
@@ -20,7 +19,12 @@ export async function pushSalesReceipts(data, config, context) {
 
     for (const [orderId, orderData] of Object.entries(orders)) {
         const customerName = `${orderData.marketplace || 'Amazon'} Customer`;
+        
+        // QBO Payload Date (Strictly YYYY-MM-DD)
         const txnDate = orderData.date ? new Date(orderData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        
+        // Signature Date (Exact Millisecond Timestamp)
+        const exactTimeMs = orderData.date ? new Date(orderData.date).getTime() : Date.now();
 
         let netAmount = 0;
         const qboLines = orderData.lines.map((line, index) => {
@@ -49,17 +53,16 @@ export async function pushSalesReceipts(data, config, context) {
             };
         });
 
-        // 1. Duplicate Check
-        const signature = `SALES_${txnDate}_${orderData.settlementId}_${netAmount.toFixed(2)}`;
+        // Use exactTimeMs to prevent false duplicates
+        const signature = `SALES_${exactTimeMs}_${orderData.settlementId}_${netAmount.toFixed(2)}`;
         const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
         const ledgerSnap = await getDoc(ledgerRef);
         
         if (ledgerSnap.exists()) {
             orderData.lines.forEach(l => rejected.push(l));
-            continue; // Skip this order, it's a duplicate!
+            continue; 
         }
 
-        // 2. Build Payload
         const payload = {
             "entityType": "SalesReceipt",
             "realmId": config.realmId,
@@ -73,13 +76,11 @@ export async function pushSalesReceipts(data, config, context) {
             }
         };
 
-        // 3. Push and Log
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "SalesReceipt", id: res.data.qboResponseId });
     }
     
-    // Trigger the UI popup if any duplicates were caught
     if (rejected.length > 0) context.showRejectionModal(rejected);
     return pushedIds;
 }
