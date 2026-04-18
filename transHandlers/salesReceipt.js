@@ -5,7 +5,6 @@ import { currentUser } from '../app.js';
 
 export async function pushSalesReceipts(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
-    
     const orders = {};
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Sales.");
