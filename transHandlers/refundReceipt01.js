@@ -1,4 +1,7 @@
 import { httpsCallable } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-functions.js";
+import { db } from '../auth.js';
+import { doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { currentUser } from '../app.js';
 
 export async function pushRefundReceipts(data, config, context) {
     const pushQboEntity = httpsCallable(config.functions, 'pushQboEntity');
@@ -7,18 +10,22 @@ export async function pushRefundReceipts(data, config, context) {
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Refunds.");
         const oId = t['order id'] || t.uid;
-        if (!refunds[oId]) refunds[oId] = { marketplace: t.marketplace, date: t['date/time'], lines: [] };
+        if (!refunds[oId]) refunds[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
         refunds[oId].lines.push(t);
     });
+
+    let pushedIds = [];
+    let rejected = [];
 
     for (const [orderId, refundData] of Object.entries(refunds)) {
         const customerName = `${refundData.marketplace || 'Amazon'} Customer`;
         const txnDate = refundData.date ? new Date(refundData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
 
+        let netAmount = 0;
         const qboLines = refundData.lines.map((line, index) => {
-            // FIX: Refund Receipt expects positive numbers to represent money refunded
-            const amt = parseFloat(line.total || 0) * -1;
+            const amt = parseFloat(line.total || 0) * -1; // Positive for QBO Refund Receipt
             const qty = parseFloat(line.quantity || 1);
+            netAmount += amt;
 
             const skuVal = (line.sku || "").trim();
             const combinedItemName = skuVal ? `${skuVal} - ${line.lineItem}` : line.lineItem;
@@ -41,6 +48,17 @@ export async function pushRefundReceipts(data, config, context) {
             };
         });
 
+        // 1. Duplicate Check
+        const signature = `REFUND_${txnDate}_${refundData.settlementId}_${netAmount.toFixed(2)}`;
+        const ledgerRef = doc(db, "users", currentUser.uid, "qbo_sync_ledger", signature);
+        const ledgerSnap = await getDoc(ledgerRef);
+        
+        if (ledgerSnap.exists()) {
+            refundData.lines.forEach(l => rejected.push(l));
+            continue; // Skip this refund
+        }
+
+        // 2. Build Payload
         const payload = {
             "entityType": "RefundReceipt",
             "realmId": config.realmId,
@@ -54,7 +72,12 @@ export async function pushRefundReceipts(data, config, context) {
             }
         };
 
-        await pushQboEntity(payload);
+        // 3. Push and Log
+        const res = await pushQboEntity(payload);
+        await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
+        pushedIds.push({ type: "RefundReceipt", id: res.data.qboResponseId });
     }
-    context.showAlert(`Success! Created ${Object.keys(refunds).length} Refund Receipts in QBO.`, "success");
+
+    if (rejected.length > 0) context.showRejectionModal(rejected);
+    return pushedIds;
 }
