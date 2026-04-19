@@ -10,8 +10,12 @@ export async function pushSalesReceipts(data, config, context) {
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Sales.");
         const oId = t['order id'] || t.uid; 
-        if (!orders[oId]) orders[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
-        orders[oId].lines.push(t);
+        const dateStamp = t['date/time'] || 'nodate';
+        const settlementId = t['settlement id'] || 'nosettlement';
+        const groupKey = `${oId}_${dateStamp}_${settlementId}`;
+        
+        if (!orders[groupKey]) orders[groupKey] = { orderId: oId, marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
+        orders[groupKey].lines.push(t);
     });
 
     let pushedIds = [];
@@ -23,7 +27,8 @@ export async function pushSalesReceipts(data, config, context) {
     let linesPushed = 0;
     const typeName = "sales receipt";
 
-    for (const [orderId, orderData] of Object.entries(orders)) {
+    for (const [groupKey, orderData] of Object.entries(orders)) {
+        const orderId = orderData.orderId;
         const customerName = `${orderData.marketplace || 'Amazon'} Customer`;
         
         const txnDate = orderData.date ? new Date(orderData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
