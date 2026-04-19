@@ -9,6 +9,12 @@ export async function pushPayouts(data, config, context) {
     let pushedIds = [];
     let rejected = [];
 
+    const totalLines = data.length;
+    const totalTxns = data.length;
+    let txnsPushed = 0;
+    let linesPushed = 0;
+    const typeName = "payout";
+
     for (const t of data) {
         if (!t.category) throw new Error("Missing category mapping in Payouts.");
         
@@ -25,6 +31,9 @@ export async function pushPayouts(data, config, context) {
         
         if (ledgerSnap.exists()) {
             rejected.push(t);
+            txnsPushed++;
+            linesPushed++;
+            if (context && context.updatePushProgress) context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
             continue; 
         }
 
@@ -53,6 +62,12 @@ export async function pushPayouts(data, config, context) {
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "Purchase", id: res.data.qboResponseId });
+
+        txnsPushed++;
+        linesPushed++;
+        if (context && context.updatePushProgress) {
+            context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
+        }
     }
 
     if (rejected.length > 0) context.showRejectionModal(rejected);
