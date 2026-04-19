@@ -37,8 +37,8 @@ export default class Home {
                 <div id="alertBox" class="alert" style="margin-bottom: 0.25rem; padding: 0.4rem;"></div>
 
                 <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.4rem 1rem; margin-bottom: 0.25rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; position: relative; overflow: hidden;">
-                    <div id="pushProgressFill" style="position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: #d4edda; z-index: 0; transition: width 0.3s ease;"></div>
-                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50; z-index: 1; position: relative;">Status: Ready to import</span>
+                    <div id="pushProgressFill" style="position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: #27ae60; z-index: 0; transition: width 0.3s ease;"></div>
+                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50; z-index: 1; position: relative; transition: color 0.3s ease;">Status: Ready to import</span>
                     <span id="limitText" style="color: #666; z-index: 1; position: relative;"></span>
                 </div>
 
@@ -165,7 +165,10 @@ export default class Home {
         const highVolumeBanner = document.getElementById('highVolumeBanner');
 
         if (!statusText) return;
+        
         if (progressFill) progressFill.style.width = '0%';
+        statusText.style.color = "#2c3e50";
+        statusText.style.textShadow = "none";
 
         if (this.activeMainTab === 'unmapped') {
             const unmappedCount = new Set(this.transactions.filter(t => !t.category).map(t => t.lineItem)).size;
@@ -189,16 +192,19 @@ export default class Home {
             totalTxns = totalLines;
         } else if (this.activeMainTab !== 'all') {
             const groups = new Set();
-            currentData.forEach(t => groups.add(t['order id'] || t.uid));
+            currentData.forEach(t => {
+                const oId = t['order id'] || t.uid;
+                const dateStamp = t['date/time'] || 'nodate';
+                const settlementId = t['settlement id'] || 'nosettlement';
+                groups.add(`${oId}_${dateStamp}_${settlementId}`);
+            });
             totalTxns = groups.size;
         }
 
         if (this.activeMainTab === 'all') {
             statusText.innerText = `Status: ${totalLines} raw lines currently filtered. Please select a specific tab to push.`;
-            statusText.style.color = "#2c3e50";
         } else {
             statusText.innerText = `${totalLines} lines for ${totalTxns} ${typeName} transactions ready to push.`;
-            statusText.style.color = "#2c3e50";
         }
         
         if (highVolumeBanner) {
@@ -212,7 +218,9 @@ export default class Home {
         
         if (statusText) {
             statusText.innerText = `${linesPushed} lines for ${txnsPushed} ${typeName} transactions pushed out of ${totalLines} lines for ${totalTxns} transactions.`;
-            statusText.style.color = "#155724"; // Dark green text during push
+            // High visibility white text with drop shadow over the solid green progress bar
+            statusText.style.color = "#ffffff"; 
+            statusText.style.textShadow = "1px 1px 3px rgba(0,0,0,0.6)"; 
         }
         
         if (progressFill && totalTxns > 0) {
@@ -273,7 +281,12 @@ export default class Home {
         
         pushBtn.innerText = "Provisioning & Pushing...";
         pushBtn.disabled = true;
-        if(statusText) statusText.style.color = "#e67e22"; 
+        
+        if(statusText) {
+            statusText.innerText = "Initializing push connection...";
+            statusText.style.color = "#ffffff"; 
+            statusText.style.textShadow = "1px 1px 3px rgba(0,0,0,0.6)";
+        }
 
         try {
             const config = {
@@ -307,12 +320,13 @@ export default class Home {
                 
                 if (statusText) {
                     statusText.innerText = `Push completed successfully! ${pushedIds.length} transactions saved to QBO.`;
-                    statusText.style.color = "#27ae60"; 
                 }
             } else {
                 if (statusText) {
                     statusText.innerText = `All selected transactions were identified as duplicates and skipped.`;
                     statusText.style.color = "#e67e22"; 
+                    statusText.style.textShadow = "none";
+                    document.getElementById('pushProgressFill').style.width = '0%';
                 }
             }
 
@@ -322,6 +336,8 @@ export default class Home {
             if(statusText) {
                 statusText.innerText = "Status: Push failed. Check alerts.";
                 statusText.style.color = "#e74c3c";
+                statusText.style.textShadow = "none";
+                document.getElementById('pushProgressFill').style.width = '0%';
             }
         } finally {
             pushBtn.innerText = originalText;
