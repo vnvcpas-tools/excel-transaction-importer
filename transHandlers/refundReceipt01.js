@@ -17,6 +17,12 @@ export async function pushRefundReceipts(data, config, context) {
     let pushedIds = [];
     let rejected = [];
 
+    const totalLines = data.length;
+    const totalTxns = Object.keys(refunds).length;
+    let txnsPushed = 0;
+    let linesPushed = 0;
+    const typeName = "refund receipt";
+
     for (const [orderId, refundData] of Object.entries(refunds)) {
         const customerName = `${refundData.marketplace || 'Amazon'} Customer`;
         
@@ -56,6 +62,9 @@ export async function pushRefundReceipts(data, config, context) {
         
         if (ledgerSnap.exists()) {
             refundData.lines.forEach(l => rejected.push(l));
+            txnsPushed++;
+            linesPushed += refundData.lines.length;
+            if (context && context.updatePushProgress) context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
             continue; 
         }
 
@@ -75,6 +84,12 @@ export async function pushRefundReceipts(data, config, context) {
         const res = await pushQboEntity(payload);
         await setDoc(ledgerRef, { batchId: config.batchId, qboId: res.data.qboResponseId, timestamp: new Date().toISOString() });
         pushedIds.push({ type: "RefundReceipt", id: res.data.qboResponseId });
+
+        txnsPushed++;
+        linesPushed += refundData.lines.length;
+        if (context && context.updatePushProgress) {
+            context.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName);
+        }
     }
 
     if (rejected.length > 0) context.showRejectionModal(rejected);
