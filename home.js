@@ -22,6 +22,28 @@ export default class Home {
         this.activeSubTab = "table";
     }
 
+    // --- NEW: Timezone Locker ---
+    // Forces the date to output YYYY-MM-DD exactly as it occurred in Amazon's PST/PDT timezone
+    getAmazonDateStr(dateStr) {
+        if (!dateStr) return new Date().toISOString().split('T')[0];
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return new Date().toISOString().split('T')[0];
+        
+        const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Los_Angeles',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+        });
+        
+        const parts = formatter.formatToParts(d);
+        const year = parts.find(p => p.type === 'year').value;
+        const month = parts.find(p => p.type === 'month').value;
+        const day = parts.find(p => p.type === 'day').value;
+        
+        return `${year}-${month}-${day}`;
+    }
+
     async render() {
         return `
             <style>
@@ -218,7 +240,6 @@ export default class Home {
         
         if (statusText) {
             statusText.innerText = `${linesPushed} lines for ${txnsPushed} ${typeName} transactions pushed out of ${totalLines} lines for ${totalTxns} transactions.`;
-            // High visibility white text with drop shadow over the solid green progress bar
             statusText.style.color = "#ffffff"; 
             statusText.style.textShadow = "1px 1px 3px rgba(0,0,0,0.6)"; 
         }
@@ -232,15 +253,16 @@ export default class Home {
     getFilteredAndPartitionedData() {
         let data = this.transactions;
 
+        // FIXED: Now uses exact string comparison against the Amazon PST date
         if (this.startDate || this.endDate) {
-            const startStr = this.startDate ? new Date(this.startDate).setHours(0,0,0,0) : 0;
-            const endStr = this.endDate ? new Date(this.endDate).setHours(23,59,59,999) : Infinity;
-
             data = data.filter(t => {
                 if (!t['date/time']) return true; 
-                const tDate = new Date(t['date/time']).getTime();
-                if (isNaN(tDate)) return true; 
-                return tDate >= startStr && tDate <= endStr;
+                const amazonDate = this.getAmazonDateStr(t['date/time']); 
+                
+                if (this.startDate && amazonDate < this.startDate) return false;
+                if (this.endDate && amazonDate > this.endDate) return false;
+                
+                return true;
             });
         }
 
@@ -378,7 +400,8 @@ export default class Home {
                     individualLines.push({ postingType: "Debit", amount: amt, qboAccountId: depId, description: "Payout Transfer Offset" });
                 }
 
-                const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
+                // Use timezone locker here too
+                const tDate = t['date/time'] ? this.getAmazonDateStr(t['date/time']) : null;
                 const res = await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
                 pushedIds.push({ type: "JournalEntry", id: res.data.qboResponseId });
                 
@@ -422,7 +445,7 @@ export default class Home {
             let summaryDateStr = config.endDate;
             if (!summaryDateStr) {
                 const dates = visibleData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
-                if (dates.length > 0) summaryDateStr = new Date(Math.max(...dates)).toISOString().split('T')[0];
+                if (dates.length > 0) summaryDateStr = this.getAmazonDateStr(new Date(Math.max(...dates)).toISOString());
             }
 
             const response = await pushJournalEntry({ realmId: config.realmId, lines: linesToPush, txnDate: summaryDateStr, privateNote: `Imported via VilBooks - Tab: ${this.activeMainTab.toUpperCase()}` });
@@ -973,7 +996,7 @@ export default class Home {
                 const amt = parseFloat(t.total || 0);
                 if (amt === 0) return;
 
-                const tDate = t['date/time'] ? new Date(t['date/time']).toLocaleDateString() : 'Unknown Date';
+                const tDate = t['date/time'] ? this.getAmazonDateStr(t['date/time']) : 'Unknown Date';
                 const catRef = t.category || `<span class="text-danger">Missing</span>`;
                 const absAmt = Math.abs(amt).toFixed(2);
 
@@ -1007,12 +1030,12 @@ export default class Home {
             if (!summaryDateStr) {
                 const dates = currentData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
                 if (dates.length > 0) {
-                    summaryDateStr = new Date(Math.max(...dates)).toLocaleDateString();
+                    summaryDateStr = this.getAmazonDateStr(new Date(Math.max(...dates)).toISOString());
                 } else {
                     summaryDateStr = "N/A";
                 }
             } else {
-                summaryDateStr = new Date(this.endDate + "T00:00:00").toLocaleDateString();
+                summaryDateStr = this.getAmazonDateStr(this.endDate + "T00:00:00");
             }
 
             html += `
