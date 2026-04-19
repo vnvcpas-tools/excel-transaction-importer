@@ -10,8 +10,12 @@ export async function pushDeposits(data, config, context) {
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Deposits.");
         const oId = t['order id'] || t.uid; 
-        if (!groups[oId]) groups[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
-        groups[oId].lines.push(t);
+        const dateStamp = t['date/time'] || 'nodate';
+        const settlementId = t['settlement id'] || 'nosettlement';
+        const groupKey = `${oId}_${dateStamp}_${settlementId}`;
+
+        if (!groups[groupKey]) groups[groupKey] = { orderId: oId, marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
+        groups[groupKey].lines.push(t);
     });
 
     let pushedIds = [];
@@ -23,7 +27,8 @@ export async function pushDeposits(data, config, context) {
     let linesPushed = 0;
     const typeName = "deposit";
 
-    for (const [orderId, groupData] of Object.entries(groups)) {
+    for (const [groupKey, groupData] of Object.entries(groups)) {
+        const orderId = groupData.orderId;
         const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
         const exactTimeMs = groupData.date ? new Date(groupData.date).getTime() : Date.now();
 
