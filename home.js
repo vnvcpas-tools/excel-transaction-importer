@@ -20,6 +20,10 @@ export default class Home {
         this.endDate = "";
         this.activeMainTab = "all";
         this.activeSubTab = "table";
+        
+        // Subscription & Role State
+        this.userRole = 'guest'; 
+        this.userProfile = null;
     }
 
     getAmazonDateStr(dateStr) {
@@ -50,6 +54,12 @@ export default class Home {
                     50% { background-color: #ffe8a1; }
                     100% { background-color: #fff3cd; }
                 }
+                .pricing-card { background: white; border: 1px solid #dee2e6; border-radius: 8px; padding: 2rem; width: 300px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+                .pricing-card h3 { color: #2c3e50; margin-top: 0; border-bottom: 2px solid #f8f9fa; padding-bottom: 1rem; }
+                .pricing-card .price { font-size: 2rem; font-weight: bold; color: #27ae60; margin: 1rem 0; }
+                .pricing-card ul { list-style: none; padding: 0; text-align: left; margin-bottom: 2rem; color: #555; }
+                .pricing-card ul li { margin-bottom: 0.5rem; }
+                .pricing-card ul li::before { content: "✓ "; color: #27ae60; font-weight: bold; }
             </style>
             
             <div class="container" style="padding-top: 0.25rem;">
@@ -58,7 +68,7 @@ export default class Home {
 
                 <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.4rem 1rem; margin-bottom: 0.25rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; position: relative; overflow: hidden;">
                     <div id="pushProgressFill" style="position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: #27ae60; z-index: 0; transition: width 0.3s ease;"></div>
-                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50; z-index: 1; position: relative; transition: color 0.3s ease;">Status: Ready to import</span>
+                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50; z-index: 1; position: relative; transition: color 0.3s ease;">Loading user profile...</span>
                     <span id="limitText" style="color: #666; z-index: 1; position: relative;"></span>
                 </div>
 
@@ -66,7 +76,7 @@ export default class Home {
                     ⚠️ For a better experience, please reduce the number of transactions to push per batch to 500 or less by applying a date filter!
                 </div>
 
-                <div class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem; padding: 0.75rem;">
+                <div id="controlPanel" class="control-panel" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 1rem; padding: 0.75rem;">
                     <input type="file" id="csvFile" accept=".csv, .tsv" style="flex: 1; min-width: 200px;">
                     
                     <div style="display: flex; gap: 5px; align-items: center;">
@@ -81,14 +91,17 @@ export default class Home {
                     <button id="viewHistoryBtn" class="btn outline" style="background: white; color: #2c3e50; border: 1px solid #2c3e50;">View Batch History</button>
                 </div>
 
-                <div class="tabs main-tabs" style="border-bottom: 2px solid #3498db; margin-bottom: 0;">
+                <div class="tabs main-tabs" style="border-bottom: 2px solid #3498db; margin-bottom: 0; display: flex; flex-wrap: wrap;">
                     <button class="tab active" data-maintab="all">All Data</button>
-                    <button class="tab" data-maintab="sales">Sales Receipts (Orders)</button>
-                    <button class="tab" data-maintab="refunds">Refund Receipts</button>
+                    <button class="tab" data-maintab="sales">Sales Receipts</button>
+                    <button class="tab" data-maintab="refunds">Refunds</button>
                     <button class="tab" data-maintab="expenses">Expenses</button>
                     <button class="tab" data-maintab="deposits">Deposits</button>
-                    <button class="tab" data-maintab="payouts">Payouts (Transfers)</button>
-                    <button class="tab" data-maintab="unmapped" style="color: var(--danger);">Unmapped Items</button>
+                    <button class="tab" data-maintab="payouts">Payouts</button>
+                    <button class="tab" data-maintab="unmapped" style="color: var(--danger);">Unmapped</button>
+                    
+                    <button class="tab" data-maintab="subscription" style="color: #7f8c8d; border-left: 2px solid #dee2e6; margin-left: auto;">💎 Subscriptions</button>
+                    <button class="tab" id="adminTabBtn" data-maintab="admin" style="display: none; color: #8e44ad;">⚙️ Admin Panel</button>
                 </div>
 
                 <div class="tabs sub-tabs" style="background: #f8f9fa; padding-top: 5px; margin-bottom: 1rem;" id="subTabContainer">
@@ -97,7 +110,7 @@ export default class Home {
                 </div>
 
                 <div id="tabContent">
-                    <p style="padding: 2rem; text-align: center; color: #7f8c8d;">Upload an Amazon Date Range Report to begin.</p>
+                    <p style="padding: 2rem; text-align: center; color: #7f8c8d;">Loading workspace...</p>
                 </div>
             </div>
 
@@ -115,7 +128,7 @@ export default class Home {
     }
 
     async afterRender() {
-        document.getElementById('limitText').innerText = currentUser ? 'Unlimited Uploads Enabled (Storage Active)' : 'Guest Limit: 10 Rows (Max 10 uploads/mo)';
+        await this.checkUserRoleAndLimits();
         await this.loadCategories();
         
         document.getElementById('csvFile').addEventListener('change', e => this.handleFileSelect(e));
@@ -147,10 +160,22 @@ export default class Home {
                 e.target.classList.add('active');
                 this.activeMainTab = e.target.dataset.maintab;
                 
-                if (this.activeMainTab === 'unmapped') {
-                    document.getElementById('subTabContainer').style.display = 'none';
+                const ctrlPanel = document.getElementById('controlPanel');
+                const subTabs = document.getElementById('subTabContainer');
+                const statusBar = document.getElementById('pushStatusBar');
+                
+                if (['subscription', 'admin'].includes(this.activeMainTab)) {
+                    ctrlPanel.style.display = 'none';
+                    subTabs.style.display = 'none';
+                    statusBar.style.display = 'none';
+                } else if (this.activeMainTab === 'unmapped') {
+                    ctrlPanel.style.display = 'flex';
+                    subTabs.style.display = 'none';
+                    statusBar.style.display = 'flex';
                 } else {
-                    document.getElementById('subTabContainer').style.display = 'flex';
+                    ctrlPanel.style.display = 'flex';
+                    subTabs.style.display = 'flex';
+                    statusBar.style.display = 'flex';
                 }
                 
                 this.renderActiveView();
@@ -169,9 +194,73 @@ export default class Home {
         window.deleteBatch = (batchId, realmId) => this.handleDeleteBatch(batchId, realmId);
     }
 
-    renderActiveView() {
-        if (this.transactions.length === 0) return;
+    // --- NEW: Security, Roles & Subscription Initialization ---
+    async checkUserRoleAndLimits() {
+        if (!currentUser) {
+            document.getElementById('tabContent').innerHTML = `<p style="padding: 2rem; text-align: center; color: #7f8c8d;">Please log in to continue.</p>`;
+            return;
+        }
+
+        // 1. Establish Hierarchical Identity
+        this.userRole = 'guest'; 
+        if (currentUser.email === 'vnvcpas.excelimporter@gmail.com') {
+            this.userRole = 'super_admin';
+        } else {
+            try {
+                // Check if Super Admin granted them access
+                const adminDoc = await getDoc(doc(db, "global_config", "admins"));
+                if (adminDoc.exists() && adminDoc.data()[currentUser.email]) {
+                    this.userRole = 'admin';
+                }
+            } catch (e) { console.warn("Admin check skipped due to permissions."); }
+        }
+
+        // 2. Load or Create Billing/Usage Document
+        const profileRef = doc(db, "users", currentUser.uid, "profile", "billing");
+        const profileSnap = await getDoc(profileRef);
+
+        if (!profileSnap.exists()) {
+            this.userProfile = {
+                email: currentUser.email,
+                role: this.userRole,
+                activeModules: ['amazon'],
+                monthlyBatchesPushed: 0,
+                monthlyLimit: this.userRole === 'guest' ? 10 : Infinity,
+                billingPeriodEnd: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString()
+            };
+            await setDoc(profileRef, this.userProfile);
+        } else {
+            this.userProfile = profileSnap.data();
+            
+            // Auto-reset monthly batch counter if period ended
+            if (new Date() > new Date(this.userProfile.billingPeriodEnd)) {
+                this.userProfile.monthlyBatchesPushed = 0;
+                this.userProfile.billingPeriodEnd = new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString();
+                await setDoc(profileRef, { monthlyBatchesPushed: 0, billingPeriodEnd: this.userProfile.billingPeriodEnd }, { merge: true });
+            }
+            
+            // Force sync role in case Super Admin promoted them recently
+            if (this.userProfile.role !== this.userRole) {
+                this.userProfile.role = this.userRole;
+                this.userProfile.monthlyLimit = this.userRole === 'guest' ? 10 : Infinity;
+                await setDoc(profileRef, { role: this.userRole, monthlyLimit: this.userProfile.monthlyLimit }, { merge: true });
+            }
+        }
+
+        // 3. UI Unlock for Admins
+        if (this.userRole === 'super_admin') {
+            document.getElementById('adminTabBtn').style.display = 'inline-block';
+        }
         
+        document.getElementById('tabContent').innerHTML = `<p style="padding: 2rem; text-align: center; color: #7f8c8d;">Upload an Amazon Date Range Report to begin.</p>`;
+        this.updateReadyStatus();
+    }
+
+    renderActiveView() {
+        if (this.activeMainTab === 'subscription') return this.renderSubscriptionPage();
+        if (this.activeMainTab === 'admin') return this.renderAdminPage();
+
+        if (this.transactions.length === 0) return;
         this.updateReadyStatus();
 
         if (this.activeMainTab === 'unmapped') return this.renderUnmappedTable();
@@ -179,13 +268,140 @@ export default class Home {
         this.renderJournal();
     }
 
+    // --- NEW: Subscription Placeholder Page ---
+    renderSubscriptionPage() {
+        let html = `
+            <div style="padding: 2rem; text-align: center;">
+                <h2>VilPorter SaaS Subscriptions</h2>
+                <p style="color: #666; margin-bottom: 2rem;">Expand your e-commerce integration limits and add new modules. (Stripe Gateway Coming Soon)</p>
+                
+                <div style="display: flex; justify-content: center; gap: 2rem; flex-wrap: wrap;">
+                    <div class="pricing-card">
+                        <h3>Platform Base</h3>
+                        <div class="price">$10<span style="font-size:1rem; color:#666;">/mo</span></div>
+                        <ul>
+                            <li>Access to VilPorter Engine</li>
+                            <li>Amazon Date Range Importer</li>
+                            <li>Journal Entry Synthesis</li>
+                            <li>Up to 500 Pushes / Month</li>
+                        </ul>
+                        <button class="btn" disabled style="width:100%; background:#95a5a6;">Subscribe (Pending)</button>
+                    </div>
+
+                    <div class="pricing-card" style="border: 2px solid #3498db;">
+                        <h3>Shopify Add-on</h3>
+                        <div class="price">+$5<span style="font-size:1rem; color:#666;">/mo</span></div>
+                        <ul>
+                            <li>Shopify Payout Report Importer</li>
+                            <li>Automatic Fee Extraction</li>
+                            <li>Combined Dashboard View</li>
+                            <li>Requires Platform Base</li>
+                        </ul>
+                        <button class="btn" disabled style="width:100%; background:#95a5a6;">Unlock Module (Pending)</button>
+                    </div>
+
+                    <div class="pricing-card">
+                        <h3>Pro Volume Tier</h3>
+                        <div class="price">+$20<span style="font-size:1rem; color:#666;">/mo</span></div>
+                        <ul>
+                            <li>Removes the 500 Push Limit</li>
+                            <li>Unlimited Monthly Batches</li>
+                            <li>Priority API Queuing</li>
+                            <li>Requires Platform Base</li>
+                        </ul>
+                        <button class="btn" disabled style="width:100%; background:#95a5a6;">Upgrade Limits (Pending)</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.getElementById('tabContent').innerHTML = html;
+    }
+
+    // --- NEW: Super Admin Control Panel ---
+    async renderAdminPage() {
+        if (this.userRole !== 'super_admin') {
+            document.getElementById('tabContent').innerHTML = `<p class="text-danger">Unauthorized Access.</p>`;
+            return;
+        }
+
+        let adminListHTML = '';
+        try {
+            const adminDoc = await getDoc(doc(db, "global_config", "admins"));
+            if (adminDoc.exists()) {
+                const data = adminDoc.data();
+                Object.keys(data).forEach(email => {
+                    if(data[email] === true) {
+                        adminListHTML += `
+                        <div style="display:flex; justify-content:space-between; padding:0.5rem; border-bottom:1px solid #eee;">
+                            <span>${email}</span>
+                            <button class="btn danger" style="padding:0.2rem 0.5rem; font-size:0.8rem;" onclick="window.revokeAdmin('${email}')">Revoke</button>
+                        </div>`;
+                    }
+                });
+            }
+        } catch (err) {
+            console.error(err);
+            adminListHTML = `<p class="text-danger">Failed to load admin list. See console.</p>`;
+        }
+
+        let html = `
+            <div style="padding: 2rem; max-width: 600px; margin: auto;">
+                <h2>⚙️ Super Admin Control Panel</h2>
+                <p style="color: #666;">Grant unlimited push privileges to team members by adding their Google account email below.</p>
+                
+                <div style="display: flex; gap: 10px; margin-bottom: 2rem;">
+                    <input type="text" id="newAdminEmail" placeholder="colleague@gmail.com" style="flex:1; padding:0.5rem; border:1px solid #ccc; border-radius:4px;">
+                    <button class="btn" onclick="window.addAdmin()">Grant Admin Access</button>
+                </div>
+
+                <div style="background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; padding: 1rem;">
+                    <h4 style="margin-top: 0;">Current Admins (Unlimited Access)</h4>
+                    ${adminListHTML || '<p style="color:#888; font-size:0.9rem;">No additional admins found.</p>'}
+                </div>
+            </div>
+        `;
+        document.getElementById('tabContent').innerHTML = html;
+
+        window.addAdmin = async () => {
+            const email = document.getElementById('newAdminEmail').value.trim().toLowerCase();
+            if (!email) return alert("Enter an email.");
+            try {
+                await setDoc(doc(db, "global_config", "admins"), { [email]: true }, { merge: true });
+                alert(`${email} is now an Admin! They will have unlimited access upon next login.`);
+                this.renderAdminPage();
+            } catch (e) { alert("Failed to add admin. " + e.message); }
+        };
+
+        window.revokeAdmin = async (email) => {
+            if(!confirm(`Revoke admin privileges for ${email}?`)) return;
+            try {
+                await setDoc(doc(db, "global_config", "admins"), { [email]: false }, { merge: true });
+                alert(`${email} has been demoted to Guest.`);
+                this.renderAdminPage();
+            } catch (e) { alert("Failed to revoke admin. " + e.message); }
+        };
+    }
+
     updateReadyStatus() {
         const statusText = document.getElementById('pushStatusText');
         const progressFill = document.getElementById('pushProgressFill');
         const highVolumeBanner = document.getElementById('highVolumeBanner');
+        const limitText = document.getElementById('limitText');
 
         if (!statusText) return;
         
+        // Display limits based on Role
+        if (limitText) {
+            if (this.userRole === 'super_admin' || this.userRole === 'admin') {
+                limitText.innerHTML = `<strong>${this.userRole.toUpperCase()}</strong> | Unlimited Pushes`;
+                limitText.style.color = "#27ae60";
+            } else {
+                let remaining = Math.max(0, 10 - (this.userProfile?.monthlyBatchesPushed || 0));
+                limitText.innerHTML = `<strong>GUEST</strong> | ${remaining} batches left | Max 10 rows`;
+                limitText.style.color = remaining <= 2 ? "#e74c3c" : "#666";
+            }
+        }
+
         if (progressFill) progressFill.style.width = '0%';
         statusText.style.color = "#2c3e50";
         statusText.style.textShadow = "none";
@@ -287,6 +503,11 @@ export default class Home {
     }
 
     async handlePushToQbo() {
+        // --- NEW: Enforce Guest Limits Before Push ---
+        if (this.userRole === 'guest' && this.userProfile.monthlyBatchesPushed >= 10) {
+            return this.showAlert("Monthly push limit reached (10/10). Please subscribe in the UI to continue pushing data.", "danger");
+        }
+
         if (this.activeMainTab === 'all') return this.showAlert("Please select a specific transaction tab (Sales, Refunds, etc.) to push.", "warning");
         const qboSelect = document.getElementById('qboSelect');
         if (!qboSelect || !qboSelect.value) return this.showAlert("Please connect and select a QBO account first.", "warning");
@@ -307,16 +528,12 @@ export default class Home {
             statusText.style.textShadow = "1px 1px 3px rgba(0,0,0,0.6)";
         }
 
-        // --- NEW: Request Screen Wake Lock ---
         let wakeLock = null;
         try {
             if ('wakeLock' in navigator) {
                 wakeLock = await navigator.wakeLock.request('screen');
-                console.log('Screen Wake Lock activated. Device will not sleep.');
             }
-        } catch (err) {
-            console.warn('Wake Lock could not be engaged:', err);
-        }
+        } catch (err) {}
 
         try {
             const config = {
@@ -347,6 +564,15 @@ export default class Home {
                     view: this.activeSubTab,
                     qboIds: pushedIds
                 });
+
+                // --- NEW: Increment Guest Batch Usage ---
+                if (this.userRole === 'guest') {
+                    this.userProfile.monthlyBatchesPushed++;
+                    await setDoc(doc(db, "users", currentUser.uid, "profile", "billing"), {
+                        monthlyBatchesPushed: this.userProfile.monthlyBatchesPushed
+                    }, { merge: true });
+                    this.updateReadyStatus(); // Refresh limit text
+                }
                 
                 if (statusText) {
                     statusText.innerText = `Push completed successfully! ${pushedIds.length} transactions saved to QBO.`;
@@ -370,11 +596,7 @@ export default class Home {
                 document.getElementById('pushProgressFill').style.width = '0%';
             }
         } finally {
-            // --- NEW: Release Screen Wake Lock ---
-            if (wakeLock !== null) {
-                wakeLock.release().then(() => console.log('Screen Wake Lock released.'));
-            }
-
+            if (wakeLock !== null) wakeLock.release().catch(()=>{});
             pushBtn.innerText = originalText;
             pushBtn.disabled = false;
         }
@@ -613,20 +835,6 @@ export default class Home {
         modal.style.display = 'flex';
     }
 
-    checkGuestLimits() {
-        if (currentUser) return true;
-        const currentMonth = new Date().getMonth();
-        let limitData = JSON.parse(localStorage.getItem('guestLimits')) || { month: currentMonth, count: 0 };
-        if (limitData.month !== currentMonth) limitData = { month: currentMonth, count: 0 };
-        if (limitData.count >= 10) {
-            this.showAlert("Monthly guest upload limit reached.", "warning");
-            return false;
-        }
-        limitData.count += 1;
-        localStorage.setItem('guestLimits', JSON.stringify(limitData));
-        return true;
-    }
-
     async handleFileSelect(e) {
         this.hideAlert();
         const file = e.target.files[0];
@@ -637,7 +845,6 @@ export default class Home {
             e.target.value = "";
             return;
         }
-        if (!this.checkGuestLimits()) { e.target.value = ""; return; }
 
         const fileDocRef = doc(db, "transactionFiles", file.name);
         const fileDocSnap = await getDoc(fileDocRef);
@@ -662,9 +869,11 @@ export default class Home {
     }
 
     parseData(data, isNew) {
-        if (!currentUser && data.length > 10) {
+        // --- NEW: Enforce Guest CSV Limits on Upload ---
+        const isGuest = !this.userProfile || this.userProfile.role === 'guest';
+        if (isGuest && data.length > 10) {
             data = data.slice(0, 10);
-            this.showAlert("Guest mode: File truncated to first 10 transaction lines.", "info");
+            this.showAlert("Guest Mode: File truncated to first 10 transaction lines. Please upgrade via Subscriptions for unlimited processing.", "info");
         }
 
         const expandedTransactions = [];
@@ -971,139 +1180,5 @@ export default class Home {
                 btn.disabled = false;
             }
         };
-    }
-
-    renderJournal() {
-        const currentData = this.getFilteredAndPartitionedData();
-
-        if (currentData.length === 0) {
-            let html = `
-                <div class="table-responsive">
-                <table><thead><tr>
-                    <th>Account / Category</th>
-                    <th style="text-align: right;">Debit</th>
-                    <th style="text-align: right;">Credit</th>
-                    <th>Line Description</th>
-                </tr></thead><tbody>
-                <tr><td colspan="4" style="text-align:center;">No data matches the current filters.</td></tr>
-                </tbody></table></div>`;
-            document.getElementById('tabContent').innerHTML = html;
-            return;
-        }
-
-        const depName = this.depositAccount && this.depositAccount.trim() !== "" ? this.depositAccount : "Payments to Deposit";
-        let html = `<div class="table-responsive">`;
-
-        if (this.activeMainTab === 'payouts') {
-            html += `
-                <table><thead><tr>
-                    <th>Account / Category</th>
-                    <th style="text-align: right;">Debit</th>
-                    <th style="text-align: right;">Credit</th>
-                    <th>Line Description</th>
-                </tr></thead><tbody>
-            `;
-
-            currentData.forEach(t => {
-                const amt = parseFloat(t.total || 0);
-                if (amt === 0) return;
-
-                const tDate = t['date/time'] ? this.getAmazonDateStr(t['date/time']) : 'Unknown Date';
-                const catRef = t.category || `<span class="text-danger">Missing</span>`;
-                const absAmt = Math.abs(amt).toFixed(2);
-
-                html += `<tr style="background:#e9ecef;"><td colspan="4"><strong>Date: ${tDate}</strong> (Settlement ID: ${t['settlement id'] || 'N/A'})</td></tr>`;
-
-                if (amt < 0) {
-                    html += `<tr><td>${catRef}</td><td style="text-align: right;">${absAmt}</td><td></td><td>${t.lineItem}</td></tr>`;
-                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td></td><td style="text-align: right;">${absAmt}</td><td>Payout Transfer Offset</td></tr>`;
-                } else {
-                    html += `<tr style="background:#f8f9fa;"><td><strong>${depName}</strong></td><td style="text-align: right;">${absAmt}</td><td></td><td>Payout Transfer Offset</td></tr>`;
-                    html += `<tr><td>${catRef}</td><td></td><td style="text-align: right;">${absAmt}</td><td>${t.lineItem}</td></tr>`;
-                }
-            });
-
-            html += `</tbody></table></div>`;
-            document.getElementById('tabContent').innerHTML = html;
-
-        } else {
-            let summary = {};
-            let netDeposit = 0;
-
-            currentData.forEach(t => {
-                const amt = parseFloat(t.total || 0);
-                const key = t.lineItem || "UNCATEGORIZED"; 
-                if (!summary[key]) summary[key] = { amt: 0, catName: t.category || `<span class="text-danger">Missing</span>` };
-                summary[key].amt += amt;
-                netDeposit += amt;
-            });
-
-            let summaryDateStr = this.endDate;
-            if (!summaryDateStr) {
-                const dates = currentData.map(t => new Date(t['date/time']).getTime()).filter(n => !isNaN(n));
-                if (dates.length > 0) {
-                    summaryDateStr = this.getAmazonDateStr(new Date(Math.max(...dates)).toISOString());
-                } else {
-                    summaryDateStr = "N/A";
-                }
-            } else {
-                summaryDateStr = this.getAmazonDateStr(this.endDate + "T00:00:00");
-            }
-
-            html += `
-                <h4 style="margin-top: 0; margin-bottom: 10px; color: #2c3e50;">Journal Entry Date: <span style="font-weight: normal;">${summaryDateStr}</span></h4>
-                <table><thead><tr>
-                    <th>Account / Category</th>
-                    <th style="text-align: right;">Debit</th>
-                    <th style="text-align: right;">Credit</th>
-                    <th>Line Description</th>
-                </tr></thead><tbody>
-            `;
-
-            let journalLines = [];
-            if (netDeposit > 0) {
-                journalLines.push({ catName: `<strong>${depName}</strong>`, debit: netDeposit, credit: 0, desc: `Total ${this.activeMainTab}`, isDeposit: true });
-            } else if (netDeposit < 0) {
-                journalLines.push({ catName: `<strong>${depName}</strong>`, debit: 0, credit: Math.abs(netDeposit), desc: `Total ${this.activeMainTab}`, isDeposit: true });
-            }
-
-            let totalDebit = netDeposit > 0 ? netDeposit : 0;
-            let totalCredit = netDeposit < 0 ? Math.abs(netDeposit) : 0;
-
-            Object.keys(summary).forEach(lineKey => {
-                const amt = summary[lineKey].amt;
-                if (amt < 0) {
-                    journalLines.push({ catName: summary[lineKey].catName, debit: Math.abs(amt), credit: 0, desc: lineKey, isDeposit: false });
-                    totalDebit += Math.abs(amt);
-                } else if (amt > 0) {
-                    journalLines.push({ catName: summary[lineKey].catName, debit: 0, credit: amt, desc: lineKey, isDeposit: false });
-                    totalCredit += amt;
-                }
-            });
-
-            journalLines.sort((a, b) => {
-                if (a.isDeposit && a.debit > 0) return -1;
-                if (b.isDeposit && b.debit > 0) return 1;
-                if (a.isDeposit && a.credit > 0) return 1;
-                if (b.isDeposit && b.credit > 0) return -1;
-                return a.debit > 0 ? -1 : 1; 
-            });
-
-            journalLines.forEach(line => {
-                const debitStr = line.debit > 0 ? line.debit.toFixed(2) : "";
-                const creditStr = line.credit > 0 ? line.credit.toFixed(2) : "";
-                html += `<tr><td>${line.catName}</td><td style="text-align: right;">${debitStr}</td><td style="text-align: right;">${creditStr}</td><td>${line.desc}</td></tr>`;
-            });
-
-            html += `<tr style="font-weight:bold; background:#e9ecef">
-                <td>TOTAL</td>
-                <td style="text-align: right;">${totalDebit.toFixed(2)}</td>
-                <td style="text-align: right;">${totalCredit.toFixed(2)}</td>
-                <td></td>
-            </tr>`;
-
-            html += `</tbody></table></div>`;
-            document.getElementById('tabContent').innerHTML = html;
-        }
     }
 }
