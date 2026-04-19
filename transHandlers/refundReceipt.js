@@ -31,7 +31,7 @@ export async function pushRefundReceipts(data, config, context) {
         const orderId = refundData.orderId;
         const customerName = `${refundData.marketplace || 'Amazon'} Customer`;
         
-        const txnDate = refundData.date ? new Date(refundData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const txnDate = context.getAmazonDateStr(refundData.date);
         const exactTimeMs = refundData.date ? new Date(refundData.date).getTime() : Date.now();
 
         let netAmount = 0;
