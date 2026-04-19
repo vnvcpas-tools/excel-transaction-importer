@@ -10,8 +10,12 @@ export async function pushRefundReceipts(data, config, context) {
     data.forEach(t => {
         if (!t.category) throw new Error("Missing category mapping in Refunds.");
         const oId = t['order id'] || t.uid;
-        if (!refunds[oId]) refunds[oId] = { marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
-        refunds[oId].lines.push(t);
+        const dateStamp = t['date/time'] || 'nodate';
+        const settlementId = t['settlement id'] || 'nosettlement';
+        const groupKey = `${oId}_${dateStamp}_${settlementId}`;
+
+        if (!refunds[groupKey]) refunds[groupKey] = { orderId: oId, marketplace: t.marketplace, date: t['date/time'], settlementId: t['settlement id'], lines: [] };
+        refunds[groupKey].lines.push(t);
     });
 
     let pushedIds = [];
@@ -23,7 +27,8 @@ export async function pushRefundReceipts(data, config, context) {
     let linesPushed = 0;
     const typeName = "refund receipt";
 
-    for (const [orderId, refundData] of Object.entries(refunds)) {
+    for (const [groupKey, refundData] of Object.entries(refunds)) {
+        const orderId = refundData.orderId;
         const customerName = `${refundData.marketplace || 'Amazon'} Customer`;
         
         const txnDate = refundData.date ? new Date(refundData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
