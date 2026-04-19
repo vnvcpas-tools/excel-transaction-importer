@@ -21,7 +21,6 @@ export default class Home {
         this.activeMainTab = "all";
         this.activeSubTab = "table";
     }
-
     // --- NEW: Timezone Locker ---
     // Forces the date to output YYYY-MM-DD exactly as it occurred in Amazon's PST/PDT timezone
     getAmazonDateStr(dateStr) {
