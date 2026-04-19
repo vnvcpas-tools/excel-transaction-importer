@@ -20,7 +20,7 @@ export async function pushPayouts(data, config, context) {
         
         const vendorName = `${t.marketplace || 'Amazon'} Vendor`;
         
-        const txnDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const txnDate = context.getAmazonDateStr(t['date/time']);
         const exactTimeMs = t['date/time'] ? new Date(t['date/time']).getTime() : Date.now();
         
         const amt = Math.abs(parseFloat(t.total || 0));
