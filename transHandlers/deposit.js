@@ -29,7 +29,7 @@ export async function pushDeposits(data, config, context) {
 
     for (const [groupKey, groupData] of Object.entries(groups)) {
         const orderId = groupData.orderId;
-        const txnDate = groupData.date ? new Date(groupData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const txnDate = context.getAmazonDateStr(groupData.date);
         const exactTimeMs = groupData.date ? new Date(groupData.date).getTime() : Date.now();
 
         let netAmount = 0;
