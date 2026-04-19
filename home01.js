@@ -33,12 +33,13 @@ export default class Home {
             </style>
             
             <div class="container" style="padding-top: 0.25rem;">
-                <h2 style="margin-top: 0; margin-bottom: 0.25rem; font-size: 1.4rem;">Transaction Importer (Amazon Date Range Report)</h2>
+                <h2 style="margin-top: 0; margin-bottom: 0.25rem; font-size: 1.4rem;">VilPorter to QBO (Amazon Date Range Report)</h2>
                 <div id="alertBox" class="alert" style="margin-bottom: 0.25rem; padding: 0.4rem;"></div>
 
-                <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.4rem 1rem; margin-bottom: 0.25rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
-                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50;">Status: Ready to import</span>
-                    <span id="limitText" style="color: #666;"></span>
+                <div id="pushStatusBar" style="background: #f8f9fa; border: 1px solid #dee2e6; border-left: 4px solid #3498db; padding: 0.4rem 1rem; margin-bottom: 0.25rem; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; position: relative; overflow: hidden;">
+                    <div id="pushProgressFill" style="position: absolute; left: 0; top: 0; bottom: 0; width: 0%; background: #d4edda; z-index: 0; transition: width 0.3s ease;"></div>
+                    <span id="pushStatusText" style="font-weight: 500; color: #2c3e50; z-index: 1; position: relative;">Status: Ready to import</span>
+                    <span id="limitText" style="color: #666; z-index: 1; position: relative;"></span>
                 </div>
 
                 <div id="highVolumeBanner" style="display: none; animation: flashWarning 1.5s infinite; color: #856404; border: 1px solid #ffeeba; padding: 0.4rem; margin-bottom: 0.5rem; border-radius: 4px; text-align: center; font-size: 0.85rem; font-weight: bold;">
@@ -150,30 +151,74 @@ export default class Home {
 
     renderActiveView() {
         if (this.transactions.length === 0) return;
-
-        const statusText = document.getElementById('pushStatusText');
-        const highVolumeBanner = document.getElementById('highVolumeBanner');
-
-        if (statusText) {
-            if (this.activeMainTab === 'unmapped') {
-                const unmappedCount = new Set(this.transactions.filter(t => !t.category).map(t => t.lineItem)).size;
-                statusText.innerText = `Status: ${unmappedCount} unmapped items to resolve`;
-                statusText.style.color = "#e74c3c";
-                if (highVolumeBanner) highVolumeBanner.style.display = 'none';
-            } else {
-                const currentData = this.getFilteredAndPartitionedData();
-                statusText.innerText = `Status: ${currentData.length} transactions ready to push`;
-                statusText.style.color = "#2c3e50";
-                
-                if (highVolumeBanner) {
-                    highVolumeBanner.style.display = currentData.length > 500 ? 'block' : 'none';
-                }
-            }
-        }
+        
+        this.updateReadyStatus();
 
         if (this.activeMainTab === 'unmapped') return this.renderUnmappedTable();
         if (this.activeSubTab === 'table') return this.renderTable();
         this.renderJournal();
+    }
+
+    updateReadyStatus() {
+        const statusText = document.getElementById('pushStatusText');
+        const progressFill = document.getElementById('pushProgressFill');
+        const highVolumeBanner = document.getElementById('highVolumeBanner');
+
+        if (!statusText) return;
+        if (progressFill) progressFill.style.width = '0%';
+
+        if (this.activeMainTab === 'unmapped') {
+            const unmappedCount = new Set(this.transactions.filter(t => !t.category).map(t => t.lineItem)).size;
+            statusText.innerText = `${unmappedCount} unmapped items to resolve.`;
+            statusText.style.color = "#e74c3c";
+            if (highVolumeBanner) highVolumeBanner.style.display = 'none';
+            return;
+        }
+
+        const currentData = this.getFilteredAndPartitionedData();
+        const totalLines = currentData.length;
+        
+        let totalTxns = 0;
+        const typeNames = { 'sales': 'sales receipt', 'refunds': 'refund receipt', 'expenses': 'expense', 'deposits': 'deposit', 'payouts': 'payout' };
+        let typeName = typeNames[this.activeMainTab] || 'journal';
+
+        if (this.activeSubTab === 'journal') {
+            totalTxns = 1;
+            typeName = 'journal entry';
+        } else if (this.activeMainTab === 'payouts') {
+            totalTxns = totalLines;
+        } else if (this.activeMainTab !== 'all') {
+            const groups = new Set();
+            currentData.forEach(t => groups.add(t['order id'] || t.uid));
+            totalTxns = groups.size;
+        }
+
+        if (this.activeMainTab === 'all') {
+            statusText.innerText = `Status: ${totalLines} raw lines currently filtered. Please select a specific tab to push.`;
+            statusText.style.color = "#2c3e50";
+        } else {
+            statusText.innerText = `${totalLines} lines for ${totalTxns} ${typeName} transactions ready to push.`;
+            statusText.style.color = "#2c3e50";
+        }
+        
+        if (highVolumeBanner) {
+            highVolumeBanner.style.display = totalLines > 500 ? 'block' : 'none';
+        }
+    }
+
+    updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, typeName) {
+        const statusText = document.getElementById('pushStatusText');
+        const progressFill = document.getElementById('pushProgressFill');
+        
+        if (statusText) {
+            statusText.innerText = `${linesPushed} lines for ${txnsPushed} ${typeName} transactions pushed out of ${totalLines} lines for ${totalTxns} transactions.`;
+            statusText.style.color = "#155724"; // Dark green text during push
+        }
+        
+        if (progressFill && totalTxns > 0) {
+            const percentage = Math.min(100, Math.round((txnsPushed / totalTxns) * 100));
+            progressFill.style.width = `${percentage}%`;
+        }
     }
 
     getFilteredAndPartitionedData() {
@@ -215,6 +260,7 @@ export default class Home {
     }
 
     async handlePushToQbo() {
+        if (this.activeMainTab === 'all') return this.showAlert("Please select a specific transaction tab (Sales, Refunds, etc.) to push.", "warning");
         const qboSelect = document.getElementById('qboSelect');
         if (!qboSelect || !qboSelect.value) return this.showAlert("Please connect and select a QBO account first.", "warning");
 
@@ -227,8 +273,7 @@ export default class Home {
         
         pushBtn.innerText = "Provisioning & Pushing...";
         pushBtn.disabled = true;
-        statusText.innerText = "Status: Provisioning & Pushing to QuickBooks...";
-        statusText.style.color = "#e67e22"; 
+        if(statusText) statusText.style.color = "#e67e22"; 
 
         try {
             const config = {
@@ -247,7 +292,6 @@ export default class Home {
                 else if (this.activeMainTab === 'deposits') pushedIds = await pushDeposits(visibleData, config, this);
                 else if (this.activeMainTab === 'expenses') pushedIds = await pushExpenses(visibleData, config, this);
                 else if (this.activeMainTab === 'payouts') pushedIds = await pushPayouts(visibleData, config, this);
-                else throw new Error("Detailed sync is only available within specific tabs.");
             } else {
                 pushedIds = await this.pushStandardJournalEntry(visibleData, config);
             }
@@ -260,16 +304,25 @@ export default class Home {
                     view: this.activeSubTab,
                     qboIds: pushedIds
                 });
+                
+                if (statusText) {
+                    statusText.innerText = `Push completed successfully! ${pushedIds.length} transactions saved to QBO.`;
+                    statusText.style.color = "#27ae60"; 
+                }
+            } else {
+                if (statusText) {
+                    statusText.innerText = `All selected transactions were identified as duplicates and skipped.`;
+                    statusText.style.color = "#e67e22"; 
+                }
             }
-            
-            statusText.innerText = "Status: Push completed successfully.";
-            statusText.style.color = "#27ae60"; 
 
         } catch (error) {
             console.error("Push failed:", error);
             this.showAlert(error.message || "Failed to push to QBO. See console.", "danger");
-            statusText.innerText = "Status: Push failed. Check alerts.";
-            statusText.style.color = "#e74c3c";
+            if(statusText) {
+                statusText.innerText = "Status: Push failed. Check alerts.";
+                statusText.style.color = "#e74c3c";
+            }
         } finally {
             pushBtn.innerText = originalText;
             pushBtn.disabled = false;
@@ -287,6 +340,11 @@ export default class Home {
         let pushedIds = [];
 
         if (this.activeMainTab === 'payouts') {
+            const totalTxns = visibleData.length;
+            const totalLines = visibleData.length;
+            let txnsPushed = 0;
+            let linesPushed = 0;
+
             for (const t of visibleData) {
                 if (!t.category) throw new Error("Missing Categories: Please map all payout line items.");
                 const amt = parseFloat(t.total || 0);
@@ -307,6 +365,10 @@ export default class Home {
                 const tDate = t['date/time'] ? new Date(t['date/time']).toISOString().split('T')[0] : null;
                 const res = await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
                 pushedIds.push({ type: "JournalEntry", id: res.data.qboResponseId });
+                
+                txnsPushed++;
+                linesPushed++;
+                this.updatePushProgress(linesPushed, txnsPushed, totalLines, totalTxns, 'payout');
             }
             this.showAlert(`Success! ${visibleData.length} Individual Payout Entries created in QBO.`, "success");
         } else {
@@ -351,6 +413,7 @@ export default class Home {
             if (response.data.success) {
                 this.showAlert(`Success! ${this.activeMainTab.toUpperCase()} Summary Journal Entry created in QBO.`, "success");
                 pushedIds.push({ type: "JournalEntry", id: response.data.qboResponseId });
+                this.updatePushProgress(visibleData.length, 1, visibleData.length, 1, 'journal entry');
             }
         }
         return pushedIds;
@@ -476,7 +539,7 @@ export default class Home {
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['date/time'] || ''}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['type'] || ''}</td>
                 <td style="padding: 8px; border-bottom: 1px solid #eee;">${t['settlement id'] || ''}</td>
-                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${t.total || 0}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${parseFloat(t.total).toFixed(2)}</td>
             </tr>`;
         });
         
