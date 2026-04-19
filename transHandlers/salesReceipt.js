@@ -31,7 +31,7 @@ export async function pushSalesReceipts(data, config, context) {
         const orderId = orderData.orderId;
         const customerName = `${orderData.marketplace || 'Amazon'} Customer`;
         
-        const txnDate = orderData.date ? new Date(orderData.date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0];
+        const txnDate = context.getAmazonDateStr(orderData.date);
         const exactTimeMs = orderData.date ? new Date(orderData.date).getTime() : Date.now();
 
         let netAmount = 0;
