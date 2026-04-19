@@ -21,8 +21,7 @@ export default class Home {
         this.activeMainTab = "all";
         this.activeSubTab = "table";
     }
-    // --- NEW: Timezone Locker ---
-    // Forces the date to output YYYY-MM-DD exactly as it occurred in Amazon's PST/PDT timezone
+
     getAmazonDateStr(dateStr) {
         if (!dateStr) return new Date().toISOString().split('T')[0];
         const d = new Date(dateStr);
@@ -252,7 +251,6 @@ export default class Home {
     getFilteredAndPartitionedData() {
         let data = this.transactions;
 
-        // FIXED: Now uses exact string comparison against the Amazon PST date
         if (this.startDate || this.endDate) {
             data = data.filter(t => {
                 if (!t['date/time']) return true; 
@@ -309,6 +307,17 @@ export default class Home {
             statusText.style.textShadow = "1px 1px 3px rgba(0,0,0,0.6)";
         }
 
+        // --- NEW: Request Screen Wake Lock ---
+        let wakeLock = null;
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log('Screen Wake Lock activated. Device will not sleep.');
+            }
+        } catch (err) {
+            console.warn('Wake Lock could not be engaged:', err);
+        }
+
         try {
             const config = {
                 realmId: qboSelect.value,
@@ -361,6 +370,11 @@ export default class Home {
                 document.getElementById('pushProgressFill').style.width = '0%';
             }
         } finally {
+            // --- NEW: Release Screen Wake Lock ---
+            if (wakeLock !== null) {
+                wakeLock.release().then(() => console.log('Screen Wake Lock released.'));
+            }
+
             pushBtn.innerText = originalText;
             pushBtn.disabled = false;
         }
@@ -399,7 +413,6 @@ export default class Home {
                     individualLines.push({ postingType: "Debit", amount: amt, qboAccountId: depId, description: "Payout Transfer Offset" });
                 }
 
-                // Use timezone locker here too
                 const tDate = t['date/time'] ? this.getAmazonDateStr(t['date/time']) : null;
                 const res = await pushJournalEntry({ realmId: config.realmId, lines: individualLines, txnDate: tDate, privateNote: `VilBooks Transfer ID: ${t['settlement id'] || 'Manual'}` });
                 pushedIds.push({ type: "JournalEntry", id: res.data.qboResponseId });
